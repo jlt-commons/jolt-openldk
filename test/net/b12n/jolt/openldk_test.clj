@@ -171,8 +171,44 @@
     (testing "elements are checked against the component type"
       (is (re-find #"does not fit a Java byte"
                    (ex-message (thrown #(ldk/call-static "Fixture" "byteSum" "([B)I" [200])))))
-      (is (re-find #"not an array type"
+      (is (re-find #"a vector for parameter I"
                    (ex-message (thrown #(ldk/call-static "Fixture" "add" "(II)I" [1] 2))))))))
+
+(deftest arguments-must-fit-their-parameter-type
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))]
+      (testing "array elements are checked against the component, and the error names the element"
+        (is (re-find #"element 0 of the vector for \[Ljava/lang/String;: an integer cannot be passed for parameter Ljava/lang/String;"
+                     (msg #(ldk/call-static "Fixture" "join" "([Ljava/lang/String;)Ljava/lang/String;" [1 2]))))
+        (is (re-find #"element 1 of the vector for \[\[I: an integer for array parameter \[I"
+                     (msg #(ldk/call-static "Fixture" "deep" "([[I)I" [[1 2] 3])))))
+      (testing "a scalar or a string is not an array"
+        (is (re-find #"an integer for array parameter \[I" (msg #(ldk/call-static "Fixture" "sum" "([I)I" 5))))
+        (is (re-find #"a string for array parameter \[I" (msg #(ldk/call-static "Fixture" "sum" "([I)I" "x"))))
+        (ldk/with-ref [xs (ldk/new-object "java.util.ArrayList" "()V")]
+          (is (re-find #"a java.util.ArrayList for array parameter \[I"
+                       (msg #(ldk/call-static "Fixture" "sum" "([I)I" xs))))))
+      (testing "a vector inside an Object[] has to be built first, and the error says how"
+        (is (re-find #"element 1 .*a vector cannot be passed for parameter Ljava/lang/Object;; build the array with new-array"
+                     (msg #(ldk/call-static "java.util.Arrays" "toString" "([Ljava/lang/Object;)Ljava/lang/String;" ["a" [1]])))))
+      (testing "a scalar boxes only where its box fits"
+        (is (= "java.lang.Integer:5" (ldk/call-static "Fixture" "boxedInt" "(Ljava/lang/Integer;)Ljava/lang/String;" 5)))
+        (is (re-find #"does not fit a Java int"
+                     (msg #(ldk/call-static "Fixture" "boxedInt" "(Ljava/lang/Integer;)Ljava/lang/String;" 3000000000))))
+        (is (re-find #"a string cannot be passed for parameter Ljava/lang/Integer;"
+                     (msg #(ldk/call-static "Fixture" "boxedInt" "(Ljava/lang/Integer;)Ljava/lang/String;" "5"))))
+        (is (= "java.lang.Character:a"
+               (ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;" \a))))
+      (testing "descriptors are parsed strictly"
+        (doseq [bad ["V" "int" "X" "" "L" "[" "[Q" "Ljava/lang/String" "Ljava.lang.String;" "II"]]
+          (is (re-find #"bad type descriptor" (msg #(ldk/new-array bad []))) (pr-str bad)))
+        (is (re-find #"malformed method descriptor" (msg #(ldk/call-static "Fixture" "add" "(II" 1 2))))
+        (is (re-find #"malformed method descriptor"
+                     (msg #(ldk/call-static "Fixture" "join" "([Ljava.lang.String;)Ljava/lang/String;" ["a"]))))
+        (is (re-find #"bad type descriptor" (msg #(ldk/call-static "Fixture" "add" "(II)Q" 1 2))))))
+    (testing "the bridge is still healthy after all of that"
+      (is (= 6 (ldk/call-static "Fixture" "sum" "([I)I" [1 2 3]))))))
 
 (deftest java-arrays-come-back-as-handles-and-read-as-vectors
   (when-built

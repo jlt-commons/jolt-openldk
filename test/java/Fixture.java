@@ -32,6 +32,7 @@ public class Fixture {
     public static String[] names() { return new String[] {"ada", null, "\u00e9"}; }
     public static Object[] mixed() { return new Object[] {"s", 1, 2.5, true, null, new Fixture(3)}; }
     public static int[] none() { return new int[0]; }
+    public static String boxedInt(Integer i) { return i.getClass().getName() + ":" + i; }
 
     private int count;
     public Fixture(int start) { count = start; }

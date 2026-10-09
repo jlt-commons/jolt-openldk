@@ -83,8 +83,8 @@ Methods are named the way JNI names them, a name plus a descriptor, because Java
 | `char` | Clojure char up to U+FFFF; past that it doesn't fit one Java char and is refused | char, except half a surrogate pair, which a jolt char can't hold: that comes back as its integer code |
 | `String` | Clojure string, any Unicode except NUL, which would end the C string the request travels in | string, NUL and control characters included; a lone surrogate, legal in Java, becomes U+FFFD |
 | `Integer` `Long` `Double` `Boolean` `Character` returned as objects | | unboxed to the Clojure value |
-| a scalar where `Object` is expected | boxed as `Long` (so it must fit 64 bits), `Double` or `Boolean` | |
-| an array (`[I`, `[Ljava/lang/String;`, `[[I` ...) | a Clojure vector, each element converted as the component type would be; or a JavaRef to an array | a JavaRef; read it with `array->vec` |
+| a scalar or string where a reference type is expected | boxed as Java would: an integer as `Long` (or `Integer` for an `Integer` parameter), a double as `Double`, then `Boolean`, `Character`, `String`. Only where that box fits the parameter (`Object`, `Number`, `Comparable`, `Serializable`, `CharSequence` or the box itself); anything else is refused | |
+| an array (`[I`, `[Ljava/lang/String;`, `[[I` ...) | a Clojure vector, each element converted and checked as an argument of the component type, with the element's index in any error; or a JavaRef to an array | a JavaRef; read it with `array->vec` |
 | anything else | a JavaRef you got back earlier | a JavaRef |
 | `null` | `nil` | `nil` |
 
@@ -100,7 +100,7 @@ Arrays go in as vectors and come back as handles, because an array is mutable an
   (ldk/array->vec xs))                            ;=> [1 2 3]
 ```
 
-`array->vec` converts by component type: `int[]` and `long[]` to integers, `byte[]` to signed integers as in Java, `boolean[]` to booleans, `char[]` to chars, `String[]` to strings. `Object[]` elements convert like returned values, so strings and boxed scalars become values and any other object, a nested array included, becomes a JavaRef to release. Only a vector is taken for an array, never a seq.
+`array->vec` converts by component type: `int[]` and `long[]` to integers, `byte[]` to signed integers as in Java, `boolean[]` to booleans, `char[]` to chars, `String[]` to strings. `Object[]` elements convert like returned values, so strings and boxed scalars become values and any other object, a nested array included, becomes a JavaRef to release. Only a vector is taken for an array, never a seq. A `float[]` reads back widened to double, so `0.1f` arrives as `0.10000000149011612`, the same as a returned `float`. A vector inside an `Object[]` is refused, since nothing says what array it should become: build it with `new-array` and put the handle in instead. Descriptors, for `new-array` and in method descriptors, are parsed strictly, so `int`, `V` or a dotted `Ljava.lang.String;` is an error rather than a strange array.
 
 A Java exception arrives as an `ex-info`:
 
@@ -126,11 +126,11 @@ On the machine above, 2026-10-09:
 
 ## What doesn't work yet
 
-- **Bulk arrays.** Every element crosses as text. Measured with 100,000 elements, a `byte[]` or an `int[]` took about 60 ms to build from a vector and about 260 ms to read back, and came back equal. Fine for configuration, slow for image data.
+- **Bulk arrays.** Every element crosses as text. Measured with 100,000 elements, a `byte[]` or an `int[]` took about 60 ms to build from a vector and 260 to 330 ms to read back across two runs, and came back equal. A million `int`s took 0.7 s in and 3.4 s out. Fine for configuration, slow for image data.
 - **Java calling back into Clojure.** No interface can be implemented from Clojure, so no callbacks, listeners or lambdas.
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
-- **Argument types are checked loosely.** Scalars are range-checked against the descriptor, but a string or a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
+- **JavaRef arguments aren't class-checked.** Scalars, strings and vectors are checked against the parameter type, but a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
 - **OpenLDK's own gaps.** It's a young runtime. Two string bugs found while building this are filed upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12), with notes in `docs/openldk-upstream-notes.md`. One is worked around here. The other, `("é✓".toUpperCase() + "!")` throwing a NullPointerException that escapes `catch (Throwable)`, is not.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
@@ -141,7 +141,7 @@ bb test     # wire tests always; the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 ```
 
-Last run: wire tests 10 tests and 55 assertions, OpenLDK tests 14 tests and 97 assertions, all passing.
+Last run: wire tests 10 tests and 55 assertions, OpenLDK tests 15 tests and 121 assertions, all passing.
 
 ## Licence
 

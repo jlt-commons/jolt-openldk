@@ -7,6 +7,10 @@
   `new-array` makes one to keep, and `array->vec` and `array-length` read
   any Java array by its component type (signed bytes, booleans, chars,
   strings, handles for other objects).
+- Arguments are checked against their parameter type: an array element's
+  error names its index, a scalar boxes only where its box fits (an Integer
+  parameter gets an Integer), and descriptors are parsed strictly, so `int`,
+  `V` or `Ljava.lang.String;` fails instead of building a strange array.
 
 ## First cut
 

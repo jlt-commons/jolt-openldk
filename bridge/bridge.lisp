@@ -31,21 +31,47 @@
 
 ;;; --- descriptors ---------------------------------------------------------
 
+(defun %ldk-field-end (desc start)
+  "The index just past the field descriptor that starts at START in DESC, or
+NIL when there is none there. A field descriptor is one of B C D F I J S Z,
+Lpkg/Name; with a slashed, non-empty name, or [ followed by one."
+  (when (< start (length desc))
+    (case (char desc start)
+      ((#\B #\C #\D #\F #\I #\J #\S #\Z) (1+ start))
+      (#\[ (%ldk-field-end desc (1+ start)))
+      (#\L (let ((semi (position #\; desc :start start)))
+             (when (and semi
+                        (> semi (1+ start))
+                        (not (find-if (lambda (c) (find c ".[()")) desc
+                                      :start (1+ start) :end semi)))
+               (1+ semi))))
+      (t nil))))
+
+(defun %ldk-check-field (desc)
+  "DESC, if it is exactly one field descriptor; an error naming it otherwise."
+  (let ((end (%ldk-field-end desc 0)))
+    (unless (and end (= end (length desc)))
+      (error "bad type descriptor ~S: want one of B C D F I J S Z, ~
+              Lpkg/Name; with slashes, or [ followed by one of those" desc))
+    desc))
+
 (defun %ldk-split-descriptor (desc)
-  "\"(ILjava/lang/String;[I)V\" -> (values (\"I\" \"Ljava/lang/String;\" \"[I\") \"V\")."
+  "\"(ILjava/lang/String;[I)V\" -> (values (\"I\" \"Ljava/lang/String;\" \"[I\") \"V\").
+Every part is checked, so a typo fails here with the descriptor in the message."
   (let ((close (position #\) desc))
         (params '()))
     (unless (and (plusp (length desc)) (char= (char desc 0) #\() close)
       (error "malformed method descriptor ~S" desc))
     (let ((i 1))
       (loop while (< i close)
-            do (let ((start i))
-                 (loop while (char= (char desc i) #\[) do (incf i))
-                 (if (char= (char desc i) #\L)
-                     (setf i (1+ (position #\; desc :start i)))
-                     (incf i))
-                 (push (subseq desc start i) params))))
-    (values (nreverse params) (subseq desc (1+ close)))))
+            do (let ((end (%ldk-field-end desc i)))
+                 (unless (and end (<= end close))
+                   (error "malformed method descriptor ~S at position ~D" desc i))
+                 (push (subseq desc i end) params)
+                 (setf i end))))
+    (let ((ret (subseq desc (1+ close))))
+      (unless (string= ret "V") (%ldk-check-field ret))
+      (values (nreverse params) ret))))
 
 (defun %ldk-method-key (name desc)
   "OpenLDK names a method by its name and parameter descriptor, without the
@@ -100,66 +126,102 @@ return type: add(II)."
 
 ;;; --- values in ---------------------------------------------------------------
 
-(defun %ldk-box (classname key value)
-  (%ldk-call-static classname key value))
+(defparameter *ldk-boxes*
+  '(("Ljava/lang/Object;" :i :d :z :c :s)
+    ("Ljava/io/Serializable;" :i :d :z :c :s)
+    ("Ljava/lang/Comparable;" :i :d :z :c :s)
+    ("Ljava/lang/Number;" :i :d)
+    ("Ljava/lang/Long;" :i)
+    ("Ljava/lang/Integer;" :i)
+    ("Ljava/lang/Double;" :d)
+    ("Ljava/lang/Boolean;" :z)
+    ("Ljava/lang/Character;" :c)
+    ("Ljava/lang/String;" :s)
+    ("Ljava/lang/CharSequence;" :s))
+  "Which Clojure scalars a reference parameter takes, by its descriptor. A
+scalar becomes the box Java would give it (an integer is a Long, or an
+Integer for an Integer parameter) and a string a java.lang.String, so it can
+only go where that class fits. Any other reference parameter takes a JavaRef
+or nil. A JavaRef's class is not checked against the parameter's here.")
+
+(defun %ldk-noun (tag)
+  (case tag
+    (:i "an integer") (:d "a double") (:z "a boolean") (:c "a char")
+    (:s "a string") (:array "a vector") (:ref "an object") (:null "null")
+    (t (string-downcase (string tag)))))
+
+(defun %ldk-wire-double (value)
+  (ecase (first value)
+    (:d (coerce (second value) 'double-float))
+    (:nan (- sb-ext:double-float-positive-infinity sb-ext:double-float-positive-infinity))
+    (:inf (if (minusp (second value))
+              sb-ext:double-float-negative-infinity
+              sb-ext:double-float-positive-infinity))))
+
+(defun %ldk-wire-char (value)
+  ;; A Clojure char is a code point; a Java char is one UTF-16 unit, so
+  ;; anything past U+FFFF does not fit one.
+  (%ldk-fit (second value) '(unsigned-byte 16)
+            "char (a code point past U+FFFF needs two Java chars)"))
+
+(defun %ldk-primitive-arg (param tag value)
+  (let ((kind (char param 0)))
+    (flet ((refuse () (error "~A for parameter ~A" (%ldk-noun tag) param)))
+      (case tag
+        (:i (let ((n (second value)))
+              (case kind
+                (#\I (%ldk-fit n '(signed-byte 32) "int"))
+                (#\S (%ldk-fit n '(signed-byte 16) "short"))
+                (#\B (%ldk-fit n '(signed-byte 8) "byte"))
+                (#\C (%ldk-fit n '(unsigned-byte 16) "char"))
+                (#\J (%ldk-fit n '(signed-byte 64) "long"))
+                (#\F (coerce n 'single-float))
+                (#\D (coerce n 'double-float))
+                (t (refuse)))))
+        (:d (case kind
+              (#\D (%ldk-wire-double value))
+              (#\F (coerce (%ldk-wire-double value) 'single-float))
+              (t (refuse))))
+        (:z (if (char= kind #\Z) (ecase (second value) (:true 1) (:false 0)) (refuse)))
+        (:c (if (char= kind #\C) (%ldk-wire-char value) (refuse)))
+        (t (refuse))))))
+
+(defun %ldk-boxed-arg (param tag value)
+  (unless (member tag (cdr (assoc param *ldk-boxes* :test #'string=)))
+    (error "~A cannot be passed for parameter ~A~:[~;; build the array with new-array and pass its handle~]"
+           (%ldk-noun tag) param (eq tag :array)))
+  (ecase tag
+    (:s (jstring (second value)))
+    (:i (if (string= param "Ljava/lang/Integer;")
+            (%ldk-call-static "java/lang/Integer" "valueOf(I)"
+                              (%ldk-fit (second value) '(signed-byte 32) "int, boxed for an Integer parameter"))
+            ;; Long.valueOf would wrap a bignum into an impossible Long.
+            (%ldk-call-static "java/lang/Long" "valueOf(J)"
+                              (%ldk-fit (second value) '(signed-byte 64) "long, boxed for a reference parameter"))))
+    (:d (%ldk-call-static "java/lang/Double" "valueOf(D)" (%ldk-wire-double value)))
+    (:z (%ldk-call-static "java/lang/Boolean" "valueOf(Z)" (ecase (second value) (:true 1) (:false 0))))
+    (:c (%ldk-call-static "java/lang/Character" "valueOf(C)" (%ldk-wire-char value)))))
 
 (defun %ldk-arg (param value)
   "Turn wire VALUE into what OpenLDK passes for a parameter of type PARAM."
-  (let ((tag (first value))
-        (ref-param (member (char param 0) '(#\L #\[))))
-    (ecase tag
-      (:null (if ref-param nil (error "null for primitive parameter ~A" param)))
-      (:ref (if ref-param (%ldk-deref (second value))
-                (error "an object for primitive parameter ~A" param)))
-      (:s (if ref-param (jstring (second value))
-              (error "a string for primitive parameter ~A" param)))
-      (:i (let ((n (second value)))
-            (case (char param 0)
-              (#\I (%ldk-fit n '(signed-byte 32) "int"))
-              (#\S (%ldk-fit n '(signed-byte 16) "short"))
-              (#\B (%ldk-fit n '(signed-byte 8) "byte"))
-              (#\C (%ldk-fit n '(unsigned-byte 16) "char"))
-              (#\J (%ldk-fit n '(signed-byte 64) "long"))
-              (#\F (coerce n 'single-float))
-              (#\D (coerce n 'double-float))
-              (t (if ref-param
-                     ;; Boxed as a Long, so it has to fit one: Long.valueOf
-                     ;; would otherwise wrap a bignum into an impossible Long.
-                     (%ldk-box "java/lang/Long" "valueOf(J)"
-                               (%ldk-fit n '(signed-byte 64) "long, boxed for an Object parameter"))
-                     (error "an integer for parameter ~A" param))))))
-      ((:d :nan :inf)
-       (let ((x (case tag
-                  (:d (coerce (second value) 'double-float))
-                  (:nan (- sb-ext:double-float-positive-infinity
-                           sb-ext:double-float-positive-infinity))
-                  (:inf (if (minusp (second value))
-                            sb-ext:double-float-negative-infinity
-                            sb-ext:double-float-positive-infinity)))))
-         (case (char param 0)
-           (#\D x)
-           (#\F (coerce x 'single-float))
-           (t (if ref-param
-                  (%ldk-box "java/lang/Double" "valueOf(D)" x)
-                  (error "a double for parameter ~A" param))))))
-      (:z (let ((b (ecase (second value) (:true 1) (:false 0))))
-            (case (char param 0)
-              (#\Z b)
-              (t (if ref-param
-                     (%ldk-box "java/lang/Boolean" "valueOf(Z)" b)
-                     (error "a boolean for parameter ~A" param))))))
-      ;; A Clojure char is a code point; a Java char is one UTF-16 unit, so
-      ;; anything past U+FFFF does not fit one.
-      ;; A Clojure vector for an array parameter: built with the parameter's
-      ;; component type, so (:array ((:i 1))) is an int[] for [I and a
-      ;; long[] for [J, and nested vectors make [[I.
-      (:array (if (char= (char param 0) #\[)
-                  (%ldk-make-array (subseq param 1) (second value))
-                  (error "a vector for parameter ~A, which is not an array type" param)))
-      (:c (if (char= (char param 0) #\C)
-              (%ldk-fit (second value) '(unsigned-byte 16)
-                        "char (a code point past U+FFFF needs two Java chars)")
-              (error "a char for parameter ~A" param))))))
+  (let ((tag (if (member (first value) '(:nan :inf)) :d (first value))))
+    (case (char param 0)
+      ;; An array parameter: a vector built with its component type (so
+      ;; (:array ((:i 1))) is an int[] for [I, a long[] for [J, and nested
+      ;; vectors make [[I), an array handle, or null.
+      (#\[ (case tag
+             (:null nil)
+             (:array (%ldk-make-array (subseq param 1) (second value)))
+             (:ref (let ((object (%ldk-deref (second value))))
+                     (unless (java-array-p object)
+                       (error "a ~A for array parameter ~A" (%ldk-class-dotted object) param))
+                     object))
+             (t (error "~A for array parameter ~A" (%ldk-noun tag) param))))
+      (#\L (case tag
+             (:null nil)
+             (:ref (%ldk-deref (second value)))
+             (t (%ldk-boxed-arg param tag value))))
+      (t (%ldk-primitive-arg param tag value)))))
 
 (defun %ldk-fit (n type what)
   (unless (typep n type)
@@ -191,7 +253,12 @@ return type: add(II)."
 (defun %ldk-make-array (component values)
   "A Java array whose component has descriptor COMPONENT (I, Ljava/lang/String;,
 [I ...), holding wire VALUES converted as arguments of that type."
-  (let ((elements (mapcar (lambda (v) (%ldk-arg component v)) values)))
+  (%ldk-check-field component)
+  (let ((elements (loop for v in values
+                        for i from 0
+                        collect (handler-case (%ldk-arg component v)
+                                  (error (c)
+                                    (error "element ~D of the vector for [~A: ~A" i component c))))))
     (make-java-array :component-class (%bin-type-name-to-class component)
                      :size (length elements)
                      :initial-contents (if (char= (char component 0) #\C)
