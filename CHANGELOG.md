@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Moved to `jlt-commons/jolt-openldk` and made public.
+- CI on GitHub Actions: lint, Linux x86-64, Linux arm64 (through
+  `linux/Dockerfile`) and macOS arm64, each running the build, every test with
+  skipping disallowed, and the tour. Its first run verified Linux x86-64 on
+  real hardware, which local emulation could not. `build.sh` retries
+  `ocicl install` and prints the end of a failed step's log.
+
 - Linux. Verified on Linux arm64 (Ubuntu 26.04 in Docker): `bridge/build.sh`,
   every test with skipping disallowed, and the tour, with no change to the
   bridge, shim or Clojure code. It also covered OpenLDK reading the class

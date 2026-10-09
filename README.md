@@ -22,7 +22,7 @@ Java libraries from [jolt](https://github.com/jolt-lang/jolt), with no JVM in th
   (ldk/to-string xs))                                          ;=> "[a, 2]"
 ```
 
-Verified on macOS arm64 and on Linux arm64 (Ubuntu 26.04 in Docker), with jolt 0.8.20, SBCL 2.6.9 and JDK 25, on 2026-10-09. [Platforms](#platforms) has the detail, including why Linux x86-64 isn't on that list yet.
+Verified on macOS arm64, Linux x86-64 and Linux arm64, with jolt 0.8.20, SBCL 2.6.9 and JDK 25, and checked on every push by CI. [Platforms](#platforms) has the detail.
 
 ## Is this the right tool?
 
@@ -201,10 +201,14 @@ On the machine above, 2026-10-09:
 
 | Platform | Status |
 |---|---|
-| macOS arm64 | Verified. `bb gates` on the machine itself. |
-| Linux arm64 | Verified. `bb linux` on Apple silicon runs Ubuntu 26.04 natively in Docker: `bridge/build.sh`, every test with skipping disallowed, and the tour. |
-| Linux x86-64 | Not verified. Under Docker's x86-64 emulation on Apple silicon, compiling SBCL 2.6.9 stops in `src/code/irrat` with the cross-compiler's `Unimplemented.`, and the same build succeeds natively on arm64. That points at the emulator rather than at Linux, but only a real x86-64 machine can say. `bb linux` there will tell. |
+| macOS arm64 | Verified. `bb gates` locally, and the `macos-arm64` CI job. |
+| Linux x86-64 | Verified. The `linux-x86_64` CI job, on GitHub's Ubuntu runner: `bridge/build.sh`, every test with skipping disallowed, and the tour. |
+| Linux arm64 | Verified. The `linux-arm64` CI job, and `bb linux` on Apple silicon, both through `linux/Dockerfile` on Ubuntu 26.04. |
 | macOS x86-64, Windows | Not attempted. |
+
+Don't use `bb linux` with `JOLT_OPENLDK_LINUX_PLATFORM=linux/amd64` on Apple silicon. Under Docker's x86-64 emulation, compiling SBCL 2.6.9 stops in `src/code/irrat` with the cross-compiler's `Unimplemented.`, while the same build passes on real x86-64 hardware in CI. The emulator is at fault, not Linux.
+
+CI (`.github/workflows/ci.yml`) runs lint and the three platform jobs on every push to `main` and every pull request. Each runs `bridge/build.sh`, the tests with `JOLT_OPENLDK_REQUIRE=1` and the tour, with versions pinned and the SBCL build cached.
 
 `bb linux` builds `linux/Dockerfile` for the machine's own architecture and runs `linux/check.sh` in it, with this checkout mounted read-only and the SBCL build cached in a Docker volume. jolt and ocicl publish no Linux arm64 binaries, so on arm64 the image builds both from their release tags. jolt brings its own pinned Chez Scheme, because Ubuntu's is too old (10.0.0 lacks `vector-copy!`). The first build takes about 8 minutes and later ones reuse it. `JOLT_OPENLDK_LINUX_PLATFORM=linux/amd64` forces a platform.
 
