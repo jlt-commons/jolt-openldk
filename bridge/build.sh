@@ -79,8 +79,15 @@ fi
 # ocicl pulls from ghcr.io. Behind an HTTPS proxy that cannot tunnel to it, this
 # fails with "Unable to establish HTTPS tunnel through proxy"; run the build
 # with the proxy variables unset.
-(cd "$OPENLDK" && ocicl install > "$WORK/ocicl.log" 2>&1) \
-  || die_log "$WORK/ocicl.log" "ocicl install failed"
+# Three tries: ghcr.io drops the odd download, and one blip failed a CI run
+# that passed unchanged on the next push.
+ok=""
+for attempt in 1 2 3; do
+  if (cd "$OPENLDK" && ocicl install > "$WORK/ocicl.log" 2>&1); then ok=1; break; fi
+  echo "== ocicl install failed (attempt $attempt of 3)"
+  sleep 5
+done
+[ -n "$ok" ] || die_log "$WORK/ocicl.log" "ocicl install failed three times"
 
 # OpenLDK's Makefile assumes ~/.sbclrc loads ocicl's runtime. Use ocicl's own
 # init snippet instead of anyone's ~/.sbclrc.
