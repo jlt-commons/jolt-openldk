@@ -37,6 +37,16 @@
       (show "2026-10-09 plus 100 days" (ldk/to-string later))
       (show "  day of week" (ldk/to-string (ldk/call later "getDayOfWeek" "()Ljava/time/DayOfWeek;"))))
 
+    (println "\narrays")
+    (show "Arrays.toString(int[])"
+          (ldk/call-static "java.util.Arrays" "toString" "([I)Ljava/lang/String;" [3 1 2]))
+    (ldk/with-ref [xs (ldk/new-array "D" [2.5 -1.0 9.75])]
+      (ldk/call-static "java.util.Arrays" "sort" "([D)V" xs)
+      (show "Arrays.sort on a double[] we hold" (ldk/array->vec xs)))
+    (ldk/with-ref [s (ldk/new-object "java.lang.String" "(Ljava/lang/String;)V" "jolt,on,chez")
+                   parts (ldk/call s "split" "(Ljava/lang/String;)[Ljava/lang/String;" ",")]
+      (show "\"jolt,on,chez\".split(\",\")" (ldk/array->vec parts)))
+
     (println "\na class of our own")
     (ldk/with-ref [c (ldk/new-object "Counter" "(Ljava/lang/String;)V" "apples")]
       (show "add 3, add 4" [(ldk/call c "add" "(J)J" 3) (ldk/call c "add" "(J)J" 4)])

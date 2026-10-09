@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-First cut, on the `feat/openldk-bridge` branch. Nothing is tagged yet.
+- Arrays. A Clojure vector passed for an array parameter becomes a Java
+  array of the descriptor's component type, nested vectors included.
+  `new-array` makes one to keep, and `array->vec` and `array-length` read
+  any Java array by its component type (signed bytes, booleans, chars,
+  strings, handles for other objects).
+
+## First cut
+
+Merged as PR #1. Nothing is tagged yet.
 
 - `bridge/build.sh` builds SBCL 2.6.9 with its runtime as a shared library,
   OpenLDK at `23da184e`, a core with the bridge loaded, and the C shim, all

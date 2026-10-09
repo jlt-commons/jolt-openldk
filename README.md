@@ -84,10 +84,23 @@ Methods are named the way JNI names them, a name plus a descriptor, because Java
 | `String` | Clojure string, any Unicode except NUL, which would end the C string the request travels in | string, NUL and control characters included; a lone surrogate, legal in Java, becomes U+FFFD |
 | `Integer` `Long` `Double` `Boolean` `Character` returned as objects | | unboxed to the Clojure value |
 | a scalar where `Object` is expected | boxed as `Long` (so it must fit 64 bits), `Double` or `Boolean` | |
+| an array (`[I`, `[Ljava/lang/String;`, `[[I` ...) | a Clojure vector, each element converted as the component type would be; or a JavaRef to an array | a JavaRef; read it with `array->vec` |
 | anything else | a JavaRef you got back earlier | a JavaRef |
 | `null` | `nil` | `nil` |
 
 A JavaRef keeps its object alive until `release!`. `with-ref` releases on the throwing path too. Every call that returns an object hands back a new handle, including one that returns the same object (`StringBuilder.append`), so release those as well.
+
+Arrays go in as vectors and come back as handles, because an array is mutable and Java may keep it:
+
+```clojure
+(ldk/call-static "java.util.Arrays" "toString" "([I)Ljava/lang/String;" [3 1 2])  ;=> "[3, 1, 2]"
+
+(ldk/with-ref [xs (ldk/new-array "I" [3 1 2])]   ; an int[] you keep
+  (ldk/call-static "java.util.Arrays" "sort" "([I)V" xs)
+  (ldk/array->vec xs))                            ;=> [1 2 3]
+```
+
+`array->vec` converts by component type: `int[]` and `long[]` to integers, `byte[]` to signed integers as in Java, `boolean[]` to booleans, `char[]` to chars, `String[]` to strings. `Object[]` elements convert like returned values, so strings and boxed scalars become values and any other object, a nested array included, becomes a JavaRef to release. Only a vector is taken for an array, never a seq.
 
 A Java exception arrives as an `ex-info`:
 
@@ -113,7 +126,7 @@ On the machine above, 2026-10-09:
 
 ## What doesn't work yet
 
-- **Arrays.** A Java array comes back as a JavaRef you can pass along, but there is no conversion to a Clojure vector and no way to build one from Clojure.
+- **Bulk arrays.** Every element crosses as text. Measured with 100,000 elements, a `byte[]` or an `int[]` took about 60 ms to build from a vector and about 260 ms to read back, and came back equal. Fine for configuration, slow for image data.
 - **Java calling back into Clojure.** No interface can be implemented from Clojure, so no callbacks, listeners or lambdas.
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
@@ -128,7 +141,7 @@ bb test     # wire tests always; the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 ```
 
-Last run: wire tests 8 tests and 45 assertions, OpenLDK tests 11 tests and 66 assertions, all passing.
+Last run: wire tests 10 tests and 55 assertions, OpenLDK tests 14 tests and 97 assertions, all passing.
 
 ## Licence
 

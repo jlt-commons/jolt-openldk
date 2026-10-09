@@ -155,6 +155,73 @@
     (is (= ["/no/such/dir" "/no/such.jar"]
            (ldk/missing-classpath-entries (str dir ":/no/such/dir::/no/such.jar"))))))
 
+(deftest vectors-become-java-arrays
+  (when-built
+    (ldk/init! {:classpath classes})
+    (is (= 6 (ldk/call-static "Fixture" "sum" "([I)I" [1 2 3])))
+    (is (= 0 (ldk/call-static "Fixture" "sum" "([I)I" [])) "an empty vector is an empty array")
+    (is (= 9000000000 (ldk/call-static "Fixture" "total" "([J)J" [3000000000 6000000000])))
+    (is (= 2.0 (ldk/call-static "Fixture" "avg" "([D)D" [1.0 3.0])))
+    (is (= 2.0 (ldk/call-static "Fixture" "avg" "([D)D" [1 3])) "integers widen for a double[]")
+    (is (= "a|é|null" (ldk/call-static "Fixture" "join" "([Ljava/lang/String;)Ljava/lang/String;" ["a" "é" nil])))
+    (is (= 2 (ldk/call-static "Fixture" "trues" "([Z)I" [true false true])))
+    (is (= \é (ldk/call-static "Fixture" "last" "([C)C" [\h \é])))
+    (is (= -2 (ldk/call-static "Fixture" "byteSum" "([B)I" [-1 127 -128])))
+    (is (= 10 (ldk/call-static "Fixture" "deep" "([[I)I" [[1 2] [3] [4]])) "nested vectors make int[][]")
+    (testing "elements are checked against the component type"
+      (is (re-find #"does not fit a Java byte"
+                   (ex-message (thrown #(ldk/call-static "Fixture" "byteSum" "([B)I" [200])))))
+      (is (re-find #"not an array type"
+                   (ex-message (thrown #(ldk/call-static "Fixture" "add" "(II)I" [1] 2))))))))
+
+(deftest java-arrays-come-back-as-handles-and-read-as-vectors
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [read (fn [method desc]
+                 (ldk/with-ref [a (ldk/call-static "Fixture" method desc)]
+                   [(ldk/class-name a) (ldk/array-length a) (ldk/array->vec a)]))]
+      (is (= ["[B" 4 [-1 0 127 -128]] (read "bytes" "()[B")) "bytes are signed, as in Java")
+      (is (= ["[Z" 3 [true false true]] (read "flags" "()[Z")))
+      (is (= ["[C" 3 [\h \é \y]] (read "letters" "()[C")))
+      (is (= ["[F" 2 [0.5 -1.25]] (read "floats" "()[F")))
+      (is (= ["[Ljava.lang.String;" 3 ["ada" nil "é"]] (read "names" "()[Ljava/lang/String;")))
+      (is (= ["[I" 0 []] (read "none" "()[I"))))
+    (testing "Object[] elements convert as returned values do; other objects are handles"
+      (ldk/with-ref [a (ldk/call-static "Fixture" "mixed" "()[Ljava/lang/Object;")]
+        (let [[s i d z n f] (ldk/array->vec a)]
+          (is (= ["s" 1 2.5 true nil] [s i d z n]))
+          (is (ldk/ref? f))
+          (is (= "Fixture(3)" (ldk/to-string f)))
+          (ldk/release! f))))
+    (testing "a nested array's rows are handles of their own"
+      (ldk/with-ref [m (ldk/call-static "Fixture" "matrix" "()[[I")]
+        (is (= "[[I" (ldk/class-name m)))
+        (let [rows (ldk/array->vec m)]
+          (is (= [[1 2] [3]] (mapv ldk/array->vec rows)))
+          (run! ldk/release! rows))))
+    (testing "array->vec refuses a handle that is not an array"
+      (ldk/with-ref [xs (ldk/new-object "java.util.ArrayList" "()V")]
+        (is (re-find #"not an array" (ex-message (thrown #(ldk/array->vec xs)))))))))
+
+(deftest new-array-makes-an-array-java-can-change
+  (when-built
+    (ldk/init! {:classpath classes})
+    (ldk/with-ref [xs (ldk/new-array "I" [0 0 0 0])]
+      (is (= "[I" (ldk/class-name xs)))
+      (is (nil? (ldk/call-static "Fixture" "squares" "([I)V" xs)))
+      (is (= [0 1 4 9] (ldk/array->vec xs)) "Java wrote into the same array"))
+    (ldk/with-ref [xs (ldk/new-array "I" [3 1 2])]
+      (ldk/call-static "java.util.Arrays" "sort" "([I)V" xs)
+      (is (= [1 2 3] (ldk/array->vec xs)))
+      (is (= "[1, 2, 3]" (ldk/call-static "java.util.Arrays" "toString" "([I)Ljava/lang/String;" xs))))
+    (ldk/with-ref [ss (ldk/new-array "Ljava/lang/String;" ["b" "a"])]
+      (ldk/call-static "java.util.Arrays" "sort" "([Ljava/lang/Object;)V" ss)
+      (is (= ["a" "b"] (ldk/array->vec ss))))
+    (testing "the JDK's own arrays"
+      (ldk/with-ref [parts (ldk/with-ref [s (ldk/new-object "java.lang.String" "(Ljava/lang/String;)V" "a,b,c")]
+                             (ldk/call s "split" "(Ljava/lang/String;)[Ljava/lang/String;" ","))]
+        (is (= ["a" "b" "c"] (ldk/array->vec parts)))))))
+
 (deftest another-thread-can-call
   (when-built
    (ldk/init! {:classpath classes})

@@ -17,10 +17,13 @@
 ;;;   (:invoke id "name" "()Ljava/lang/String;" (v ...))
 ;;;   (:main "a/B" ("arg" ...))                 (:ok (:void))
 ;;;   (:class-name id)                          (:ok (:s "a.B"))
+;;;   (:new-array "I" (v ...))                  (:ok (:ref id "[I"))
+;;;   (:elements id)                            (:ok (:vec v ...))
+;;;   (:length id)                              (:ok (:i n))
 ;;;   (:release id)                             (:ok (:void))
 ;;;
 ;;; Values: (:i n) (:d x) (:nan) (:inf 1|-1) (:z :true|:false) (:c code) (:s "text")
-;;; (:null) (:ref id) on the way in, the same plus (:ref id "class") and
+;;; (:null) (:ref id) (:array (v ...)) on the way in, the same plus (:ref id "class") and
 ;;; (:void) on the way out. A Java exception is
 ;;; (:throw "java.lang.Class" "message"|:null "toString()").
 
@@ -147,6 +150,12 @@ return type: add(II)."
                      (error "a boolean for parameter ~A" param))))))
       ;; A Clojure char is a code point; a Java char is one UTF-16 unit, so
       ;; anything past U+FFFF does not fit one.
+      ;; A Clojure vector for an array parameter: built with the parameter's
+      ;; component type, so (:array ((:i 1))) is an int[] for [I and a
+      ;; long[] for [J, and nested vectors make [[I.
+      (:array (if (char= (char param 0) #\[)
+                  (%ldk-make-array (subseq param 1) (second value))
+                  (error "a vector for parameter ~A, which is not an array type" param)))
       (:c (if (char= (char param 0) #\C)
               (%ldk-fit (second value) '(unsigned-byte 16)
                         "char (a code point past U+FFFF needs two Java chars)")
@@ -162,6 +171,56 @@ return type: add(II)."
     (unless (= (length params) (length values))
       (error "~A takes ~D argument~:P, got ~D" desc (length params) (length values)))
     (mapcar #'%ldk-arg params values)))
+
+;;; --- arrays ------------------------------------------------------------------
+;;;
+;;; A Java array is OpenLDK's JAVA-ARRAY struct: a java/lang/Class for the
+;;; component and a Lisp vector. Elements are stored as OpenLDK's own compiled
+;;; code stores them: char[] holds Lisp characters (castore does code-char),
+;;; boolean[] holds 0 and 1, byte[] holds whatever was written, signed from
+;;; Java code and unsigned from JSTRING, which is why reads normalise.
+
+(defparameter *ldk-primitive-names*
+  '(("int" . #\I) ("long" . #\J) ("short" . #\S) ("byte" . #\B) ("char" . #\C)
+    ("float" . #\F) ("double" . #\D) ("boolean" . #\Z)))
+
+(defun %ldk-array-component-name (array)
+  "\"int\", \"java.lang.String\" or \"[I\": Class.getName of the component."
+  (%ldk-lstring (|getName()| (%array-component-class array))))
+
+(defun %ldk-make-array (component values)
+  "A Java array whose component has descriptor COMPONENT (I, Ljava/lang/String;,
+[I ...), holding wire VALUES converted as arguments of that type."
+  (let ((elements (mapcar (lambda (v) (%ldk-arg component v)) values)))
+    (make-java-array :component-class (%bin-type-name-to-class component)
+                     :size (length elements)
+                     :initial-contents (if (char= (char component 0) #\C)
+                                           (mapcar #'code-char elements)
+                                           elements))))
+
+(defun %ldk-array (id)
+  (let ((object (%ldk-deref id)))
+    (unless (java-array-p object)
+      (error "handle ~A is a ~A, not an array" id (%ldk-class-dotted object)))
+    object))
+
+(defun %ldk-element (kind x)
+  (case kind
+    (#\Z (%ldk-boolean x))
+    ((#\I #\J #\S) (list :i x))
+    (#\B (list :i (if (> x 127) (- x 256) x)))
+    (#\C (list :c (if (characterp x) (char-code x) x)))
+    ((#\F #\D) (%ldk-double x))
+    (t (%ldk-object x))))
+
+(defun %ldk-elements (array)
+  "Every element, tagged by the component type. Elements that are objects
+come back as values or handles, as any returned object does; a nested array
+is a handle of its own."
+  (let ((kind (or (cdr (assoc (%ldk-array-component-name array) *ldk-primitive-names*
+                              :test #'string=))
+                  #\L)))
+    (cons :vec (map 'list (lambda (x) (%ldk-element kind x)) (java-array-data array)))))
 
 ;;; --- values out --------------------------------------------------------------
 
@@ -198,7 +257,9 @@ Strings built by JSTRING store unsigned bytes, which is why only some fail."
   (list :z (if (and value (not (eql value 0))) :true :false)))
 
 (defun %ldk-class-dotted (object)
-  (substitute #\. #\/ (string (class-name (class-of object)))))
+  (if (java-array-p object)
+      (%array-type-name-for-component (%ldk-array-component-name object))
+      (substitute #\. #\/ (string (class-name (class-of object))))))
 
 (defun %ldk-object (object)
   "Strings and boxed scalars come back as values, anything else as a handle."
@@ -281,7 +342,11 @@ Strings built by JSTRING store unsigned bytes, which is why only some fail."
                  (%ldk-invoke (%ldk-deref id) name desc values)))
       (:main (destructuring-bind (classname args) rest (%ldk-main classname args)))
       (:class-name (list :s (%ldk-class-dotted (%ldk-deref (first rest)))))
-      (:release (%ldk-release (first rest)) '(:void)))))
+      (:release (%ldk-release (first rest)) '(:void))
+      (:new-array (destructuring-bind (component values) rest
+                    (%ldk-object (%ldk-make-array component values))))
+      (:elements (%ldk-elements (%ldk-array (first rest))))
+      (:length (list :i (length (java-array-data (%ldk-array (first rest)))))))))
 
 (defun %ldk-throwable-reply (condition)
   (let ((throwable (and (slot-boundp condition '|objref|) (slot-value condition '|objref|))))

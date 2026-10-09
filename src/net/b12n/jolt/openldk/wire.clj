@@ -11,7 +11,8 @@
     (:error \"class not found: Nope\")
 
   Values travel tagged, (:i n) (:d x) (:nan) (:inf 1) (:z :true) (:c 97)
-  (:s \"text\") (:null) (:ref 3 \"java.util.ArrayList\") (:void), so a Java
+  (:s \"text\") (:null) (:ref 3 \"java.util.ArrayList\") (:void), plus
+  (:array (v ...)) out and (:vec v ...) back for arrays, so a Java
   boolean comes back as a boolean and a char as a char, not as the integers
   OpenLDK keeps them as."
   (:require [clojure.edn :as edn]
@@ -56,8 +57,12 @@
     (char? v) (str "(:c " (int v) ")")
     (integer? v) (str "(:i " v ")")
     (or (double? v) (float? v)) (lisp-double v)
+    ;; Only a vector, not any seq: a lazy seq handed over by accident would
+    ;; otherwise be realised and copied into an array.
+    (vector? v) (str "(:array (" (str/join " " (map value->lisp v)) "))")
     :else (throw (ex-info (str "jolt-openldk: cannot pass a " (type v) " to Java; "
-                               "pass nil, a boolean, an integer, a double, a string, a char or a JavaRef")
+                               "pass nil, a boolean, an integer, a double, a string, a char, "
+                               "a vector (for an array parameter) or a JavaRef")
                           {:value v}))))
 
 (defn- args->lisp [args]
@@ -84,6 +89,13 @@
 
 (defn release [r] (str "(:release " (:handle r) ")"))
 
+(defn new-array [component values]
+  (str "(:new-array " (lisp-string component) " (" (str/join " " (map value->lisp values)) "))"))
+
+(defn elements [r] (str "(:elements " (:handle r) ")"))
+
+(defn array-length [r] (str "(:length " (:handle r) ")"))
+
 ;; --- Lisp text -> Clojure -------------------------------------------------------
 
 (defn lisp->value
@@ -101,6 +113,7 @@
     :c (if (<= 0xD800 a 0xDFFF) a (char a))
     :s a
     :ref (->JavaRef a b)
+    :vec (mapv lisp->value (rest v))
     (throw (ex-info (str "jolt-openldk: unknown value in a reply: " (pr-str v)) {:value v}))))
 
 (defn reply->value

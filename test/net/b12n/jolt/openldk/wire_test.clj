@@ -26,6 +26,21 @@
   (testing "a NUL would cut the C string short, so it is refused"
     (is (thrown? Exception (wire/value->lisp "a\u0000b")))))
 
+(deftest vectors-go-out-as-arrays
+  (is (= "(:array ((:i 1) (:s \"a\") (:null)))" (wire/value->lisp [1 "a" nil])))
+  (is (= "(:array ((:array ((:i 1))) (:array ())))" (wire/value->lisp [[1] []])))
+  (testing "a seq is not taken for an array"
+    (is (thrown? Exception (wire/value->lisp (list 1 2))))
+    (is (thrown? Exception (wire/value->lisp (map inc [1 2])))))
+  (is (= "(:new-array \"I\" ((:i 1) (:i 2)))" (wire/new-array "I" [1 2])))
+  (is (= "(:elements 5)" (wire/elements (wire/->JavaRef 5 "[I"))))
+  (is (= "(:length 5)" (wire/array-length (wire/->JavaRef 5 "[I")))))
+
+(deftest arrays-come-back-as-vectors
+  (is (= [1 true \a "s" nil] (wire/reply->value "(:ok (:vec (:i 1) (:z :true) (:c 97) (:s \"s\") (:null)))")))
+  (is (= [] (wire/reply->value "(:ok (:vec))")))
+  (is (= [(wire/->JavaRef 9 "[I")] (wire/reply->value "(:ok (:vec (:ref 9 \"[I\")))"))))
+
 (deftest unsupported-values-are-refused
   (is (thrown? Exception (wire/value->lisp {:a 1})))
   (is (thrown? Exception (wire/value->lisp :kw))))

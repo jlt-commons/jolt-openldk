@@ -13,8 +13,9 @@
   Its return type also says how to hand the result back: Z is a boolean, C a
   char.
 
-  Scalars, strings and boxed scalars come back as Clojure values. Every other
-  object comes back as a JavaRef, a handle that keeps the object alive until
+  Scalars, strings and boxed scalars come back as Clojure values. A Clojure
+  vector passed for an array parameter becomes a Java array. Every other
+  object, returned arrays included, comes back as a JavaRef, a handle that keeps the object alive until
   `release!`. A Java exception is an ex-info with :java/class, :java/message
   and :java/string.
 
@@ -189,6 +190,29 @@
   (send! (wire/class-name obj)))
 
 (defn to-string [obj] (call obj "toString" "()Ljava/lang/String;"))
+
+;; --- arrays ---------------------------------------------------------------------
+;;
+;; A vector passed where a descriptor says [ becomes a Java array of that
+;; component type on the way in, so most calls need none of these. They are for
+;; the other direction, and for an array you want to keep and watch Java change.
+
+(defn new-array
+  "A Java array with component descriptor `component` (\"I\", \"D\",
+  \"Ljava/lang/String;\", \"[I\" for int[][]) holding `values`, as a JavaRef.
+  Each value converts as an argument of the component type would."
+  [component values]
+  (send! (wire/new-array component values)))
+
+(defn array->vec
+  "The elements of Java array `arr` as a vector, converted the way a returned
+  value of the component type is: int[] to longs, boolean[] to booleans,
+  char[] to chars, String[] to strings. Elements that are other objects,
+  nested arrays included, come back as JavaRefs to release."
+  [arr]
+  (send! (wire/elements arr)))
+
+(defn array-length [arr] (send! (wire/array-length arr)))
 
 (defn run-main
   "Run `class-name`'s public static void main(String[]) with string `args`."
