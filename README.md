@@ -145,4 +145,9 @@ Last run: wire tests 10 tests and 55 assertions, OpenLDK tests 15 tests and 121 
 
 ## Licence
 
-Not chosen yet. `bridge/bridge.lisp` is loaded into OpenLDK's image and calls its internals, so it carries OpenLDK's licence, GPL-3.0-or-later with the Classpath exception, and says so in its header. The Clojure and C files have no header until the project picks one.
+Two licences, by file, with `NOTICE` saying which is which.
+
+- `bridge/bridge.lisp` is GPL-3.0-or-later with the Classpath exception (`COPYING`, `COPYING.CLASSPATH-EXCEPTION`), the same as OpenLDK. It has to be, since it's loaded into OpenLDK's image and calls its internals.
+- Everything else is EPL-2.0 (`LICENSE`), like jolt, with GPL-2.0-or-later plus the Classpath exception named as a Secondary License.
+
+Every source file names its licence in an `SPDX-License-Identifier` line. `bridge/build.sh` downloads and builds SBCL and OpenLDK but copies neither into this repository, so its output in `dist/` carries their licences as well. `NOTICE` has the details.

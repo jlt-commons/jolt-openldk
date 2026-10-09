@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Licensed. `bridge/bridge.lisp` is GPL-3.0-or-later with the Classpath
+  exception, like OpenLDK; everything else is EPL-2.0 with GPL-2.0-or-later
+  plus the Classpath exception as a Secondary License. `NOTICE` maps files
+  to licences, and every source file carries an SPDX line.
+
 - Arrays. A Clojure vector passed for an array parameter becomes a Java
   array of the descriptor's component type, nested vectors included.
   `new-array` makes one to keep, and `array->vec` and `array-length` read

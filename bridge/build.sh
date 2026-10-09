@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+#
 # Build what jolt-openldk loads at run time, into $JOLT_OPENLDK_HOME/dist:
 #
 #   libsbcl.dylib        SBCL's runtime as a shared library (.so on Linux)

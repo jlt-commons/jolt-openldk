@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+
 // A class of our own, compiled by `bb tour` with the JDK's javac. OpenLDK runs
 // the .class file; no JVM ever starts.
 public class Counter {

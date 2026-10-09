@@ -1,3 +1,5 @@
+;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+
 (ns net.b12n.jolt.openldk
   "Java from jolt, with no JVM: OpenLDK translates bytecode to Common Lisp and
   SBCL compiles it, inside this process.

@@ -1,3 +1,5 @@
+;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+
 (ns net.b12n.jolt.openldk-test
   "Against a real OpenLDK. Skips when bridge/build.sh has not been run, unless
   JOLT_OPENLDK_REQUIRE is set, which turns the skip into a failure for a gate

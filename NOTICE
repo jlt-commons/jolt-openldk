@@ -1,0 +1,51 @@
+jolt-openldk
+Copyright 2026
+
+Two licences apply in this repository, by file.
+
+bridge/bridge.lisp
+  GNU General Public License, version 3 or later, with the GNU Classpath
+  exception (SPDX: GPL-3.0-or-later WITH Classpath-exception-2.0).
+  Texts: COPYING and COPYING.CLASSPATH-EXCEPTION.
+
+  This file is loaded into OpenLDK's own image and calls OpenLDK's
+  internals, so it takes OpenLDK's licence.
+
+Everything else: the Clojure namespaces, the C shim, the build script, the
+tests, the examples and the documentation
+  Eclipse Public License 2.0 (SPDX: EPL-2.0). Text: LICENSE.
+
+  This Source Code may also be made available under the following
+  Secondary Licenses when the conditions for such availability set forth
+  in the Eclipse Public License, v. 2.0 are satisfied: GNU General Public
+  License, version 2 or later, with the GNU Classpath Exception.
+
+  (SPDX: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0.)
+
+Each source file names its licence in an SPDX-License-Identifier line.
+
+
+Not in this repository, but built by bridge/build.sh
+----------------------------------------------------
+
+bridge/build.sh downloads and builds the two programs below into
+$JOLT_OPENLDK_HOME (by default ~/.cache/jolt-openldk). Neither is copied
+into this repository. What build.sh produces in dist/ is a combination of
+them and the bridge, and anyone who redistributes that output takes on
+their terms.
+
+OpenLDK
+  https://github.com/atgreen/openldk
+  Copyright (C) 2023-2026 Anthony Green
+  GNU General Public License, version 3 or later, with the GNU Classpath
+  exception. openldk.core contains it, along with the Common Lisp libraries
+  it installs through ocicl, each under its own licence.
+
+SBCL (Steel Bank Common Lisp)
+  https://www.sbcl.org
+  Mostly in the public domain, with some parts under BSD-style licences;
+  see the COPYING and CREDITS files in its source. libsbcl and
+  openldk.core contain it.
+
+At run time OpenLDK reads the class library of a JDK 25 named by
+JAVA_HOME. That JDK is not built, copied or distributed by anything here.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+
 // Compiled by `bb test` into target/test-classes; exercised by openldk_test.
 public class Fixture {
     public static int add(int a, int b) { return a + b; }

@@ -1,3 +1,5 @@
+;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+
 (ns tour.openldk-tour
   "A walk through jolt-openldk: the JDK's own classes, then one of ours, then
   what an exception looks like from Clojure. Run with `bb tour`."

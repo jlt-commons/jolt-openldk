@@ -1,3 +1,5 @@
+;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+
 (ns net.b12n.jolt.openldk.wire
   "The text that crosses into OpenLDK and back. Pure, so it is tested without
   SBCL anywhere near.
