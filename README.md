@@ -118,7 +118,7 @@ On the machine above, 2026-10-09:
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
 - **Argument types are checked loosely.** Scalars are range-checked against the descriptor, but a string or a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
-- **OpenLDK's own gaps.** It's a young runtime. `docs/openldk-upstream-notes.md` has two string bugs found while building this, with minimal Java repros. One is worked around here. The other, `("é✓".toUpperCase() + "!")` throwing a NullPointerException that escapes `catch (Throwable)`, is not.
+- **OpenLDK's own gaps.** It's a young runtime. Two string bugs found while building this are filed upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12), with notes in `docs/openldk-upstream-notes.md`. One is worked around here. The other, `("é✓".toUpperCase() + "!")` throwing a NullPointerException that escapes `catch (Throwable)`, is not.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
 ## Tests

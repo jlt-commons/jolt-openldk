@@ -14,8 +14,8 @@ First cut, on the `feat/openldk-bridge` branch. Nothing is tagged yet.
   ex-info.
 - `net.b12n.jolt.openldk.wire`, the text protocol, tested on its own.
 - Works around OpenLDK's `lstring` misreading signed bytes, which turned
-  `"é".toUpperCase()` into an error. Two upstream bugs are written up, not
-  filed, in `docs/openldk-upstream-notes.md`.
+  `"é".toUpperCase()` into an error. Two upstream bugs are written up in
+  `docs/openldk-upstream-notes.md` and filed as atgreen/openldk#12 and #13.
 - `init!` checks JAVA_HOME (a JDK 25 with jmods/ or lib/modules) and every
   classpath entry before starting SBCL, because OpenLDK exits the process on
   the first and fails late on the second. A failure after SBCL started is

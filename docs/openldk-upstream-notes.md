@@ -2,9 +2,12 @@
 
 Two string bugs turned up while building this bridge. Both reproduce on
 OpenLDK alone, without anything from this repository, so they belong upstream
-at [atgreen/openldk](https://github.com/atgreen/openldk). **Neither has been
-filed.** This page is the draft. Before filing, re-check both against the
-upstream `master` of that day and search the tracker for duplicates.
+at [atgreen/openldk](https://github.com/atgreen/openldk). Both were filed on
+2026-10-09, after re-checking `master` and searching the tracker for
+duplicates: bug 1 as
+[#13](https://github.com/atgreen/openldk/issues/13) and bug 2 as
+[#12](https://github.com/atgreen/openldk/issues/12). This page keeps the
+longer notes.
 
 Verified against `master` at `23da184e4bb89aeb2d3f230d9d608ac4cff7172b`
 (2026-10-09), SBCL 2.6.9, JDK 25.0.2, macOS arm64.
