@@ -1,5 +1,8 @@
 # jolt-openldk
 
+> [!WARNING]
+> **Alpha.** This project is days old and still finding its shape. The API, the wire protocol between jolt and the bridge, the build layout and the supported platforms may all change without notice or a deprecation path. Don't build anything you can't easily rework on top of it yet.
+
 Java libraries from [jolt](https://github.com/jolt-lang/jolt), with no JVM in the process.
 
 [OpenLDK](https://github.com/atgreen/openldk) is Anthony Green's Java runtime written in Common Lisp. It reads `.class` files, translates the bytecode into Lisp and lets SBCL compile that to machine code. This project loads SBCL as a shared library into a jolt process, starts it on a core with OpenLDK already warmed up, and gives Clojure a small API for calling into it.
@@ -17,7 +20,7 @@ Java libraries from [jolt](https://github.com/jolt-lang/jolt), with no JVM in th
   (ldk/to-string xs))                                          ;=> "[a, 2]"
 ```
 
-**Status: an experiment, one day old.** It has run on one machine, macOS arm64 with jolt 0.8.19, SBCL 2.6.9 and JDK 25.0.2, on 2026-10-09. Linux is written for, but nothing has been compiled or run there. The API will change.
+Verified on macOS arm64 and on Linux arm64 (Ubuntu 26.04 in Docker), with jolt 0.8.20, SBCL 2.6.9 and JDK 25, on 2026-10-09. [Platforms](#platforms) has the detail, including why Linux x86-64 isn't on that list yet.
 
 ## Is this the right tool?
 
@@ -27,19 +30,53 @@ The reasons to want it anyway are narrower. Nothing here starts a JVM, so there 
 
 ## How it fits together
 
+Everything runs in one process. jolt calls down through a small C shim into SBCL, and Java calls back up through one jolt callback.
+
+```mermaid
+flowchart TB
+  subgraph jolt["jolt process"]
+    api["net.b12n.jolt.openldk<br/>init!, call-static, new-object, call, implement, release!"]
+    wire["net.b12n.jolt.openldk.wire<br/>request text out, reply text back"]
+    tramp["upcall trampoline<br/>one :collect-safe ffi/callback"]
+    api --> wire
+  end
+  subgraph shim["libjoltopenldk (bridge/ldk.c)"]
+    shimcall["ldk_call / ldk_free"]
+    shimup["ldk_upcall pointer<br/>set by ldk_set_upcall"]
+  end
+  subgraph sbcl["libsbcl + openldk.core"]
+    bridge["bridge/bridge.lisp<br/>reads requests, prints replies, makes proxies"]
+    ldk["OpenLDK<br/>JIT-translates each method on first call"]
+  end
+  jdk[("JDK 25 class library<br/>$JAVA_HOME/jmods or lib/modules")]
+
+  wire -- "jolt.ffi, by name" --> shimcall
+  shimcall -- "ldk_entry, filled in by SBCL at startup" --> bridge
+  bridge --> ldk
+  ldk -- reads --> jdk
+  bridge -- "Java calls a proxy" --> shimup
+  shimup --> tramp
+  tramp -- "your fn" --> api
 ```
-jolt process
-  net.b12n.jolt.openldk     Clojure API: init!, call-static, new-object, call, implement, release!
-  net.b12n.jolt.openldk.wire     request text out, reply text back (pure, tested alone)
-        │  ldk_call(request, &reply)        jolt.ffi, by name
-        ▼
-  libjoltopenldk.dylib      bridge/ldk.c: ldk_init, ldk_call, ldk_free
-        │  function pointer SBCL filled in at startup
-        ▼
-  libsbcl.dylib + openldk.core
-        bridge/bridge.lisp  reads the request, calls OpenLDK, prints the reply
-        OpenLDK             JIT-translates each method on its first call
-        JDK 25 class files  read from $JAVA_HOME/jmods
+
+One call into Java, and one callback out of it, look like this:
+
+```mermaid
+sequenceDiagram
+  participant C as Clojure
+  participant S as C shim
+  participant B as bridge.lisp
+  participant J as OpenLDK (Java)
+  C->>S: ldk_call with (:static java.util.Arrays sort ...)
+  S->>B: ldk_entry
+  B->>J: Arrays.sort(xs, comparator)
+  J->>B: comparator.compare(a, b)
+  B->>S: ldk_upcall with (:call 7 compare ...)
+  S->>C: trampoline runs your fn
+  C-->>B: reply (:ok (:i -1))
+  B-->>J: -1
+  J-->>B: sort returns
+  B-->>C: reply (:ok (:void)), malloc'd, freed by ldk_free
 ```
 
 Three things make the middle layer work, and each one cost a failed run to find.
@@ -158,11 +195,25 @@ On the machine above, 2026-10-09:
 - **OpenLDK's own gaps.** It's a young runtime. Two string bugs found while building this are filed upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12), with notes in `docs/openldk-upstream-notes.md`. One is worked around here. The other, `("é✓".toUpperCase() + "!")` throwing a NullPointerException that escapes `catch (Throwable)`, is not.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
+## Platforms
+
+| Platform | Status |
+|---|---|
+| macOS arm64 | Verified. `bb gates` on the machine itself. |
+| Linux arm64 | Verified. `bb linux` on Apple silicon runs Ubuntu 26.04 natively in Docker: `bridge/build.sh`, every test with skipping disallowed, and the tour. |
+| Linux x86-64 | Not verified. Under Docker's x86-64 emulation on Apple silicon, compiling SBCL 2.6.9 stops in `src/code/irrat` with the cross-compiler's `Unimplemented.`, and the same build succeeds natively on arm64. That points at the emulator rather than at Linux, but only a real x86-64 machine can say. `bb linux` there will tell. |
+| macOS x86-64, Windows | Not attempted. |
+
+`bb linux` builds `linux/Dockerfile` for the machine's own architecture and runs `linux/check.sh` in it, with this checkout mounted read-only and the SBCL build cached in a Docker volume. jolt and ocicl publish no Linux arm64 binaries, so on arm64 the image builds both from their release tags. jolt brings its own pinned Chez Scheme, because Ubuntu's is too old (10.0.0 lacks `vector-copy!`). The first build takes about 8 minutes and later ones reuse it. `JOLT_OPENLDK_LINUX_PLATFORM=linux/amd64` forces a platform.
+
+On a network that inspects TLS, Zscaler for instance, ocicl can't fetch from ghcr.io inside the container, because the proxy re-signs that site with its own root. `bb linux` copies the host's CA bundle (`JOLT_OPENLDK_CA_FILE`, or else `SSL_CERT_FILE`) into `linux/extra-ca/`, which git ignores, and the image trusts it. With neither set, nothing is added.
+
 ## Tests
 
 ```sh
 bb test     # wire tests always; the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
+bb linux    # the same build, tests and tour on Linux in Docker; slow, so not part of gates
 ```
 
 Last run: wire tests 11 tests and 65 assertions, OpenLDK tests 17 tests and 147 assertions, all passing.

@@ -8,3 +8,8 @@ examples/tour/target/
 .lsp/.cache/
 .nrepl-port
 .DS_Store
+
+# bb linux stages the host's CA bundle here for the image to trust (a
+# TLS-inspecting proxy such as Zscaler). A machine's own certificate, never
+# committed.
+linux/extra-ca/*.crt

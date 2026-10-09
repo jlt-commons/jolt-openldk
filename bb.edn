@@ -17,7 +17,8 @@
                         ["test" "wire tests, then the OpenLDK tests (those skip without a build)"]
                         ["tour" "the example walk-through, against the real OpenLDK"]
                         ["lint" "clj-kondo over src, test and examples"]
-                        ["gates" "lint, test with the build required, tour"]]]
+                        ["gates" "lint, test with the build required, tour"]
+                        ["linux" "build and test on Linux in Docker (linux/Dockerfile), this machine's architecture; slow, not in gates"]]]
            (println (format "  bb %-6s %s" t d)))}
 
   build
@@ -34,6 +35,26 @@
   {:doc "Walk through the API against a real OpenLDK"
    :task (do (javac! "examples/tour/target/classes" "examples/tour/java/Counter.java")
              (shell "jolt" "-A:test" "-m" "tour.openldk-tour"))}
+
+  linux
+  {:doc "Build and test on Linux in Docker, for this machine's architecture (JOLT_OPENLDK_LINUX_PLATFORM=linux/amd64 to force one). Builds are cached per platform in a Docker volume."
+   :task (let [platform (or (System/getenv "JOLT_OPENLDK_LINUX_PLATFORM")
+                            (if (#{"aarch64" "arm64"} (System/getProperty "os.arch")) "linux/arm64" "linux/amd64"))
+               tag (str "jolt-openldk-linux:" (last (str/split platform (re-pattern "/"))))
+               cache (str "jolt-openldk-linux-cache-" (last (str/split platform (re-pattern "/"))))
+               ;; Behind a TLS-inspecting proxy (Zscaler re-signs ghcr.io), the
+               ;; image has to trust the host's CA bundle or ocicl cannot fetch.
+               ;; Copied into linux/extra-ca/, which git ignores.
+               ca (some (fn [f] (when (and f (fs/exists? f)) f))
+                        [(System/getenv "JOLT_OPENLDK_CA_FILE") (System/getenv "SSL_CERT_FILE")])
+               staged "linux/extra-ca/host-ca.crt"]
+           (if ca (fs/copy ca staged {:replace-existing true}) (fs/delete-if-exists staged))
+           (println "==" platform (if ca (str "trusting the CA bundle " ca) ""))
+           (shell "docker" "build" "--platform" platform "-t" tag "linux/")
+           (shell "docker" "run" "--rm" "--platform" platform
+                  "-v" (str (fs/cwd) ":/src:ro")
+                  "-v" (str cache ":/cache")
+                  tag "/src/linux/check.sh"))}
 
   lint
   {:doc "Lint with clj-kondo"

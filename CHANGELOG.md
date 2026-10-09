@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Linux. Verified on Linux arm64 (Ubuntu 26.04 in Docker): `bridge/build.sh`,
+  every test with skipping disallowed, and the tour, with no change to the
+  bridge, shim or Clojure code. It also covered OpenLDK reading the class
+  library from `lib/modules`, since Temurin ships no `jmods`. `bb linux`
+  builds `linux/Dockerfile` for the machine's architecture: on arm64 it builds
+  jolt and ocicl from their tags (neither publishes arm64 Linux binaries); on
+  amd64 it uses their pinned release binaries. It trusts the host's CA bundle,
+  for TLS-inspecting proxies such as Zscaler, without committing it. Linux
+  x86-64 is not verified: SBCL's cross-compiler stops under Docker's x86-64
+  emulation on Apple silicon.
+- README: an alpha notice, the architecture as Mermaid diagrams (layers, and
+  one call with a callback), and a platforms table.
+
 - Java calling Clojure. `implement` makes a Java object implementing one or
   more interfaces whose methods run Clojure fns, through one jolt
   `ffi/callback` installed at startup (`ldk_set_upcall`). Default methods
