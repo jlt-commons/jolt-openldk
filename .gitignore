@@ -1,0 +1,10 @@
+# jolt/clojure build state and compiled Java, all regenerable
+.cpcache/
+.jolt/
+target/
+examples/tour/target/
+.clj-kondo/.cache/
+.clj-kondo/imports/
+.lsp/.cache/
+.nrepl-port
+.DS_Store
