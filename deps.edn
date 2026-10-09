@@ -1,0 +1,13 @@
+{:paths ["src"]
+
+ ;; The only version this has run on. A floor set where it was measured is
+ ;; safe; one set lower is a guess.
+ :jolt/min-version "0.8.19"
+
+ ;; No :jolt/native entry: the shim is found at run time in the build
+ ;; directory (net.b12n.jolt.openldk/dist-dir), because bridge/build.sh puts it
+ ;; in a per-machine cache rather than in this repository.
+ :jolt/native []
+
+ :aliases
+ {:test {:extra-paths ["test" "examples/tour/src"]}}}

@@ -1,0 +1,50 @@
+{:tasks
+ {:requires ([babashka.fs :as fs]
+             [clojure.string :as str])
+
+  :init
+  (do
+    (defn java-home []
+      (or (System/getenv "JAVA_HOME")
+          (throw (ex-info "JAVA_HOME is not set; OpenLDK and javac both need a JDK 25" {}))))
+    (defn javac! [out & sources]
+      (fs/create-dirs out)
+      (apply shell (str (java-home) "/bin/javac") "--release" "25" "-d" out sources)))
+
+  info
+  {:doc "What each task does"
+   :task (doseq [[t d] [["build" "SBCL from source, OpenLDK at its pinned commit, the core and the shim (bridge/build.sh)"]
+                        ["test" "wire tests, then the OpenLDK tests (those skip without a build)"]
+                        ["tour" "the example walk-through, against the real OpenLDK"]
+                        ["lint" "clj-kondo over src, test and examples"]
+                        ["gates" "lint, test with the build required, tour"]]]
+           (println (format "  bb %-6s %s" t d)))}
+
+  build
+  {:doc "Build into $JOLT_OPENLDK_HOME/dist (default ~/.cache/jolt-openldk/dist)"
+   :task (shell "bridge/build.sh")}
+
+  test
+  {:doc "Run the tests"
+   :task (do (javac! "target/test-classes" "test/java/Fixture.java")
+             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
+             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test"))}
+
+  tour
+  {:doc "Walk through the API against a real OpenLDK"
+   :task (do (javac! "examples/tour/target/classes" "examples/tour/java/Counter.java")
+             (shell "jolt" "-A:test" "-m" "tour.openldk-tour"))}
+
+  lint
+  {:doc "Lint with clj-kondo"
+   :task (shell "clj-kondo" "--lint" "src" "test" "examples")}
+
+  gates
+  {:doc "Every gate. The OpenLDK tests may not skip here."
+   :task (do (println "\n== lint ==") (run 'lint)
+             (println "\n== test ==")
+             (javac! "target/test-classes" "test/java/Fixture.java")
+             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
+             (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
+                    "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
+             (println "\n== tour ==") (run 'tour))}}}

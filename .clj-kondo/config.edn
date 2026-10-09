@@ -1,0 +1,7 @@
+;; jolt.ffi/defcfn expands to a def named by its first argument; the rest is a
+;; C symbol, an argtype vector and a return type, nothing a linter can check.
+;; The scoped-resource macros take a let-shaped binding vector and a body.
+{:lint-as {jolt.ffi/defcfn clj-kondo.lint-as/def-catch-all
+           ;; (with-arena [a] body) binds one name, which is fn-shaped, not let-shaped.
+           jolt.ffi/with-arena clojure.core/fn
+           net.b12n.jolt.openldk/with-ref clojure.core/let}}
