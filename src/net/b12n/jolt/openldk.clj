@@ -77,48 +77,88 @@
         (string? cp) cp
         :else (str/join ":" cp)))
 
+(defn missing-classpath-entries
+  "The entries of classpath string `cp` that do not exist. OpenLDK accepts a
+  missing entry at setup and fails on the first class load, by which time the
+  classpath can no longer be changed, so init! checks first."
+  [cp]
+  (vec (remove #(.exists (io/file %)) (remove str/blank? (str/split cp #":")))))
+
+(defn jdk-problem
+  "Why `java-home` cannot serve OpenLDK, or nil. It needs a JDK 25 and its
+  class library, as jmods/ or lib/modules. OpenLDK checks the class library
+  itself, but by exiting the process, which here is the jolt process."
+  [java-home]
+  (let [release (some-> java-home (io/file "release"))]
+    (cond
+      (nil? java-home) "JAVA_HOME is not set"
+      (not (.exists release)) (str java-home " has no release file, so it is not a JDK")
+      (not (re-find #"(?m)^JAVA_VERSION=\"25" (slurp release)))
+      (str java-home " is not a JDK 25; OpenLDK targets 25 only")
+      (not (or (.isDirectory (io/file java-home "jmods"))
+               (.exists (io/file java-home "lib" "modules"))))
+      (str java-home " has neither jmods/ nor lib/modules, OpenLDK's two sources for the class library"))))
+
 (def ^:private init-codes
   {-1 "SBCL failed to start on the core"
    -2 "the core file could not be opened"
    -3 "the shim could not make itself RTLD_GLOBAL"
-   -4 "the core did not export ldk_entry: was it built by bridge/build.sh?"})
+   -4 "the core did not export ldk_entry: was it built by bridge/build.sh?"
+   -5 "an earlier start failed part-way, and SBCL cannot be started twice; restart the process"})
+
+(def ^:private init-lock (Object.))
+
+(defn- start!
+  "Everything init! does the first time. Any failure once SBCL has been asked
+  to start is recorded, because nothing after that point can be retried in
+  this process."
+  [{:keys [classpath dist]}]
+  (when-not (built? dist)
+    (throw (ex-info (str "jolt-openldk: no build in " dist "; run bridge/build.sh, or set JOLT_OPENLDK_HOME")
+                    {:dist dist})))
+  (when-let [why (jdk-problem (System/getenv "JAVA_HOME"))]
+    (throw (ex-info (str "jolt-openldk: " why) {:java-home (System/getenv "JAVA_HOME")})))
+  (when-let [missing (seq (missing-classpath-entries classpath))]
+    (throw (ex-info (str "jolt-openldk: classpath entries do not exist: " (str/join ", " missing))
+                    {:classpath classpath :missing (vec missing)})))
+  (ffi/load-library (str dist "/" lib-name))
+  (try
+    (let [rc (ffi/with-arena [a] (ldk-init (ffi/string->ptr a (str dist "/openldk.core"))))]
+      (when-not (#{0 1} rc)
+        (throw (ex-info (str "jolt-openldk: ldk_init failed: " (init-codes rc (str "status " rc)))
+                        {:rc rc :dist dist}))))
+    (send! (wire/setup classpath))
+    (reset! state {:phase :ready :classpath classpath :dist dist})
+    (catch Exception e
+      (reset! state {:phase :failed :classpath classpath :dist dist :error (ex-message e)})
+      (throw e))))
 
 (defn init!
   "Start SBCL on the OpenLDK core and set the classpath. Idempotent for the
-  same classpath; OpenLDK sets its classpath once, so a different one throws.
+  same classpath and build; OpenLDK sets its classpath once, so a different
+  one throws, and so does any init! after a start that failed part-way.
 
-  opts: :classpath (a string, or a seq of directories and jars), :home (the
-  JOLT_OPENLDK_HOME to use). OpenLDK reads the JDK's class library at run time,
-  so JAVA_HOME must name a JDK 25."
+  opts: :classpath (a string, or a seq of directories and jars, all of which
+  must exist), :home (the JOLT_OPENLDK_HOME to use). OpenLDK reads the JDK's
+  class library at run time, so JAVA_HOME must name a JDK 25."
   ([] (init! {}))
-  ([{:keys [classpath] :as opts}]
-   (let [cp (classpath-string classpath)]
-     (if-let [{:keys [classpath]} @state]
-       (if (= cp classpath)
-         true
-         (throw (ex-info (str "jolt-openldk: already set up with classpath " classpath
-                              "; OpenLDK sets its classpath once per process")
-                         {:classpath classpath :asked cp})))
-       (let [dist (dist-dir opts)
-             java-home (System/getenv "JAVA_HOME")]
-         (when-not (built? dist)
-           (throw (ex-info (str "jolt-openldk: no build in " dist "; run bridge/build.sh, or set JOLT_OPENLDK_HOME")
-                           {:dist dist})))
-         ;; Checked here because OpenLDK's own check, at setup, ends in a Lisp
-         ;; error message about a missing directory rather than this one.
-         (when-not (and java-home (.exists (io/file java-home "release")))
-           (throw (ex-info "jolt-openldk: JAVA_HOME must name a JDK 25; OpenLDK reads its class library"
-                           {:java-home java-home})))
-         (ffi/load-library (str dist "/" lib-name))
-         (let [rc (ffi/with-arena [a] (ldk-init (ffi/string->ptr a (str dist "/openldk.core"))))]
-           (when-not (#{0 1} rc)
-             (throw (ex-info (str "jolt-openldk: ldk_init failed: " (init-codes rc (str "status " rc)))
-                             {:rc rc :dist dist}))))
-         (send! (wire/setup cp))
-         (reset! state {:classpath cp :dist dist})
+  ([opts]
+   (let [want {:classpath (classpath-string (:classpath opts)) :dist (dist-dir opts)}]
+     (locking init-lock
+       (let [{:keys [phase error] :as current} @state]
+         (case phase
+           nil (start! want)
+           :ready (when (not= want (select-keys current [:classpath :dist]))
+                    (throw (ex-info (str "jolt-openldk: already set up with classpath " (:classpath current)
+                                         " from " (:dist current)
+                                         "; OpenLDK is set up once per process")
+                                    {:current (select-keys current [:classpath :dist]) :asked want})))
+           :failed (throw (ex-info (str "jolt-openldk: an earlier init! failed after SBCL was started ("
+                                        error "); restart the process")
+                                   {:error error})))
          true)))))
 
-(defn initialized? [] (some? @state))
+(defn initialized? [] (= :ready (:phase @state)))
 
 (defn ref? [x] (wire/ref? x))
 

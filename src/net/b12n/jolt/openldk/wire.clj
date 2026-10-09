@@ -96,7 +96,9 @@
     :nan ##NaN
     :inf (if (pos? a) ##Inf ##-Inf)
     :z (= a :true)
-    :c (char a)
+    ;; A jolt char cannot hold half a surrogate pair, which a Java char can,
+    ;; so that one case comes back as its integer code.
+    :c (if (<= 0xD800 a 0xDFFF) a (char a))
     :s a
     :ref (->JavaRef a b)
     (throw (ex-info (str "jolt-openldk: unknown value in a reply: " (pr-str v)) {:value v}))))

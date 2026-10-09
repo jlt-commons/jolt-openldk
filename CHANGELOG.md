@@ -16,4 +16,11 @@ First cut, on the `feat/openldk-bridge` branch. Nothing is tagged yet.
 - Works around OpenLDK's `lstring` misreading signed bytes, which turned
   `"é".toUpperCase()` into an error. Two upstream bugs are written up, not
   filed, in `docs/openldk-upstream-notes.md`.
+- `init!` checks JAVA_HOME (a JDK 25 with jmods/ or lib/modules) and every
+  classpath entry before starting SBCL, because OpenLDK exits the process on
+  the first and fails late on the second. A failure after SBCL started is
+  recorded, and later calls say the process needs a restart.
+- Returned strings keep NUL and control characters, lone surrogates become
+  U+FFFD, and a surrogate char comes back as its integer code. Chars past
+  U+FFFF and integers boxed for Object parameters are range-checked.
 - Verified on macOS arm64 only: jolt 0.8.19, JDK 25.0.2, 2026-10-09.

@@ -2,7 +2,8 @@
   "Against a real OpenLDK. Skips when bridge/build.sh has not been run, unless
   JOLT_OPENLDK_REQUIRE is set, which turns the skip into a failure for a gate
   that must not pass by skipping."
-  (:require [clojure.test :refer [deftest is run-tests testing]]
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is run-tests testing]]
             [net.b12n.jolt.openldk :as ldk]))
 
 (def classes (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes"))
@@ -113,6 +114,46 @@
      (is (re-find #"takes 2 arguments, got 1" (ex-message (thrown #(ldk/call-static "Fixture" "add" "(II)I" 1)))))
      (is (:openldk/error (ex-data (thrown #(ldk/call-static "Fixture" "add" "(II)I" 99999999999 1))))
          "an int parameter refuses a value outside 32 bits rather than wrapping it"))))
+
+(deftest awkward-characters-come-back-whole-or-say-why
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [char-string #(ldk/call-static "java.lang.Character" "toString" "(I)Ljava/lang/String;" %)]
+      (testing "a NUL in a returned string survives the C-string crossing"
+        (is (= "\u0000" (char-string 0))))
+      (testing "other control characters too"
+        (is (= "A\tB\u0001" (ldk/call-static "Fixture" "upper" "(Ljava/lang/String;)Ljava/lang/String;" "a\tb\u0001"))))
+      (testing "a lone surrogate, legal in Java and not in jolt, becomes U+FFFD"
+        (is (= "\uFFFD" (char-string 0xD83D)))))
+    (testing "half a surrogate pair as a char comes back as its integer code"
+      (is (= 0xD83D (ldk/call-static "java.lang.Character" "highSurrogate" "(I)C" 0x1F600))))
+    (testing "a code point past U+FFFF does not fit a Java char"
+      (is (re-find #"does not fit a Java char"
+                   (ex-message (thrown #(ldk/call-static "java.lang.Character" "toUpperCase" "(C)C" (char 0x1F600)))))))
+    (testing "an integer boxed for an Object parameter has to fit a Long"
+      (is (re-find #"does not fit a Java long"
+                   (ex-message (thrown #(ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;"
+                                                        9223372036854775808N)))))
+      (is (= "java.lang.Long:9223372036854775807"
+             (ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;" 9223372036854775807))))))
+
+(deftest init-checks-what-openldk-would-exit-on
+  ;; Pure checks, no build needed: OpenLDK reacts to a bad JAVA_HOME by
+  ;; exiting the process, so init! has to catch these first.
+  (let [dir (io/file (System/getProperty "java.io.tmpdir") (str "jolt-openldk-test-" (System/nanoTime)))
+        release (io/file dir "release")]
+    (io/make-parents release)
+    (is (re-find #"not set" (ldk/jdk-problem nil)))
+    (is (re-find #"no release file" (ldk/jdk-problem (str dir))))
+    (spit release "JAVA_VERSION=\"21.0.9\"\n")
+    (is (re-find #"not a JDK 25" (ldk/jdk-problem (str dir))))
+    (spit release "IMPLEMENTOR=\"x\"\nJAVA_VERSION=\"25.0.2\"\n")
+    (is (re-find #"neither jmods/ nor lib/modules" (ldk/jdk-problem (str dir))))
+    (.mkdirs (io/file dir "jmods"))
+    (is (nil? (ldk/jdk-problem (str dir))))
+    (is (= [] (ldk/missing-classpath-entries (str dir ":" release))))
+    (is (= ["/no/such/dir" "/no/such.jar"]
+           (ldk/missing-classpath-entries (str dir ":/no/such/dir::/no/such.jar"))))))
 
 (deftest another-thread-can-call
   (when-built

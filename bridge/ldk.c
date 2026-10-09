@@ -12,6 +12,8 @@
  * functions by name and cannot call through a pointer, so ldk_call is the
  * named function that does.
  */
+/* glibc declares dladdr, Dl_info and RTLD_NOLOAD only under _GNU_SOURCE. */
+#define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +41,11 @@ static int promote_global(const void *addr) {
 
 EXPORT int ldk_init(const char *core) {
   static int initialized = 0;
+  static int attempted = 0;
   if (initialized) return 1;
+  /* SBCL makes no promise about a second initialize_lisp in a process where
+     the first one failed part-way, so don't try. Restart the process. */
+  if (attempted) return -5;
   /* initialize_lisp exits the process when it cannot read its core; check
      first so a wrong path is an error code rather than a vanished host. */
   FILE *f = fopen(core, "rb");
@@ -47,6 +53,7 @@ EXPORT int ldk_init(const char *core) {
   fclose(f);
   if (promote_global((const void *)&ldk_init) != 0) return -3;
   if (promote_global((const void *)&initialize_lisp) != 0) return -3;
+  attempted = 1;
   char *argv[] = {"jolt-openldk", "--core", (char *)core,
                   "--dynamic-space-size", "8192", "--noinform", 0};
   if (initialize_lisp(6, argv, environ) != 0) return -1;

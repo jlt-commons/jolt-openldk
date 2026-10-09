@@ -17,7 +17,7 @@ Java libraries from [jolt](https://github.com/jolt-lang/jolt), with no JVM in th
   (ldk/to-string xs))                                          ;=> "[a, 2]"
 ```
 
-**Status: an experiment, one day old.** It has run on one machine, macOS arm64 with jolt 0.8.19, SBCL 2.6.9 and JDK 25.0.2, on 2026-10-09. Linux is written for but has never run. The API will change.
+**Status: an experiment, one day old.** It has run on one machine, macOS arm64 with jolt 0.8.19, SBCL 2.6.9 and JDK 25.0.2, on 2026-10-09. Linux is written for, but nothing has been compiled or run there. The API will change.
 
 ## Is this the right tool?
 
@@ -71,7 +71,7 @@ The result in `dist/` is a 146 MB core, a 412 KB `libsbcl.dylib` and a 34 KB shi
 
 ## Using it
 
-`init!` starts SBCL and sets the classpath, which OpenLDK only accepts once per process. Calling it again with the same classpath does nothing. Calling it with a different one throws.
+`init!` starts SBCL and sets the classpath, which OpenLDK only accepts once per process. Calling it again with the same classpath does nothing. Calling it with a different one throws. Before starting anything it checks that JAVA_HOME is a JDK 25 with its class library and that every classpath entry exists, because OpenLDK reacts to the first by exiting the process and to the second by failing on the first class load, after the classpath can no longer change. If `init!` fails after SBCL was started, later calls say so and the process has to be restarted, since SBCL can't be started twice.
 
 Methods are named the way JNI names them, a name plus a descriptor, because Java overloads. The descriptor's return type also tells the bridge how to hand back the result:
 
@@ -80,10 +80,10 @@ Methods are named the way JNI names them, a name plus a descriptor, because Java
 | `int` `long` `short` `byte` | Clojure integer, range-checked for the parameter | long |
 | `double` `float` | Clojure double; NaN and infinities included | double (a float is widened, so `1.0f/3` reads `0.3333333432674408`) |
 | `boolean` | `true` / `false` | `true` / `false` |
-| `char` | Clojure char | char |
-| `String` | Clojure string, any Unicode, no NUL | string |
+| `char` | Clojure char up to U+FFFF; past that it doesn't fit one Java char and is refused | char, except half a surrogate pair, which a jolt char can't hold: that comes back as its integer code |
+| `String` | Clojure string, any Unicode except NUL, which would end the C string the request travels in | string, NUL and control characters included; a lone surrogate, legal in Java, becomes U+FFFD |
 | `Integer` `Long` `Double` `Boolean` `Character` returned as objects | | unboxed to the Clojure value |
-| a scalar where `Object` is expected | boxed as `Long`, `Double` or `Boolean` | |
+| a scalar where `Object` is expected | boxed as `Long` (so it must fit 64 bits), `Double` or `Boolean` | |
 | anything else | a JavaRef you got back earlier | a JavaRef |
 | `null` | `nil` | `nil` |
 
@@ -116,7 +116,8 @@ On the machine above, 2026-10-09:
 - **Arrays.** A Java array comes back as a JavaRef you can pass along, but there is no conversion to a Clojure vector and no way to build one from Clojure.
 - **Java calling back into Clojure.** No interface can be implemented from Clojure, so no callbacks, listeners or lambdas.
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
-- **Fatal errors take the host down.** SBCL deals with heap exhaustion, or a corrupt core, by exiting the process. `ldk_init` checks the core can be opened before handing it to SBCL, and that is the only case covered. The heap is a fixed 8 GB reservation.
+- **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
+- **Argument types are checked loosely.** Scalars are range-checked against the descriptor, but a string or a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
 - **OpenLDK's own gaps.** It's a young runtime. `docs/openldk-upstream-notes.md` has two string bugs found while building this, with minimal Java repros. One is worked around here. The other, `("é✓".toUpperCase() + "!")` throwing a NullPointerException that escapes `catch (Throwable)`, is not.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
@@ -127,7 +128,7 @@ bb test     # wire tests always; the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 ```
 
-Last run: wire tests 7 tests and 42 assertions, OpenLDK tests 9 tests and 52 assertions, all passing.
+Last run: wire tests 8 tests and 45 assertions, OpenLDK tests 11 tests and 66 assertions, all passing.
 
 ## Licence
 

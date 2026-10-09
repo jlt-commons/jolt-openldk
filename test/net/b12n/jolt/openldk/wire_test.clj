@@ -57,6 +57,13 @@
   (is (= (wire/->JavaRef 2 "java.util.ArrayList")
          (wire/reply->value "(:ok (:ref 2 \"java.util.ArrayList\"))"))))
 
+(deftest awkward-replies
+  (testing "the bridge escapes NUL and control characters as \\uXXXX"
+    (is (= "a\u0000b\u0001" (wire/reply->value "(:ok (:s \"a\\u0000b\\u0001\"))"))))
+  (testing "a surrogate char comes back as its code, since a jolt char cannot hold it"
+    (is (= 0xD83D (wire/reply->value "(:ok (:c 55357))")))
+    (is (= \a (wire/reply->value "(:ok (:c 97))")))))
+
 (deftest a-java-exception-becomes-ex-info
   (let [e (try (wire/reply->value
                 "(:throw \"java.lang.IllegalStateException\" \"boom: x\" \"java.lang.IllegalStateException: boom: x\")")

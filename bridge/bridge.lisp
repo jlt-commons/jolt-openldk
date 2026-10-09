@@ -112,15 +112,18 @@ return type: add(II)."
               (error "a string for primitive parameter ~A" param)))
       (:i (let ((n (second value)))
             (case (char param 0)
-              (#\I (check-type n (signed-byte 32)) n)
-              (#\S (check-type n (signed-byte 16)) n)
-              (#\B (check-type n (signed-byte 8)) n)
-              (#\C (check-type n (unsigned-byte 16)) n)
-              (#\J (check-type n (signed-byte 64)) n)
+              (#\I (%ldk-fit n '(signed-byte 32) "int"))
+              (#\S (%ldk-fit n '(signed-byte 16) "short"))
+              (#\B (%ldk-fit n '(signed-byte 8) "byte"))
+              (#\C (%ldk-fit n '(unsigned-byte 16) "char"))
+              (#\J (%ldk-fit n '(signed-byte 64) "long"))
               (#\F (coerce n 'single-float))
               (#\D (coerce n 'double-float))
               (t (if ref-param
-                     (%ldk-box "java/lang/Long" "valueOf(J)" n)
+                     ;; Boxed as a Long, so it has to fit one: Long.valueOf
+                     ;; would otherwise wrap a bignum into an impossible Long.
+                     (%ldk-box "java/lang/Long" "valueOf(J)"
+                               (%ldk-fit n '(signed-byte 64) "long, boxed for an Object parameter"))
                      (error "an integer for parameter ~A" param))))))
       ((:d :nan :inf)
        (let ((x (case tag
@@ -142,8 +145,17 @@ return type: add(II)."
               (t (if ref-param
                      (%ldk-box "java/lang/Boolean" "valueOf(Z)" b)
                      (error "a boolean for parameter ~A" param))))))
-      (:c (if (char= (char param 0) #\C) (second value)
+      ;; A Clojure char is a code point; a Java char is one UTF-16 unit, so
+      ;; anything past U+FFFF does not fit one.
+      (:c (if (char= (char param 0) #\C)
+              (%ldk-fit (second value) '(unsigned-byte 16)
+                        "char (a code point past U+FFFF needs two Java chars)")
               (error "a char for parameter ~A" param))))))
+
+(defun %ldk-fit (n type what)
+  (unless (typep n type)
+    (error "~A does not fit a Java ~A" n what))
+  n)
 
 (defun %ldk-args (desc values)
   (let ((params (%ldk-split-descriptor desc)))
@@ -292,13 +304,41 @@ outside KEYWORD: requests are data."
           (error "trailing text after the request"))
         form))))
 
+(defun %ldk-write-string (string stream)
+  "A string literal clojure.edn reads back to the same characters, as far as
+jolt can hold them. NUL and other control characters are written as \\uXXXX,
+because the reply crosses as a C string and a raw NUL would end it. A lone
+UTF-16 surrogate, which a Java String may legally hold, becomes U+FFFD: it
+cannot be encoded as UTF-8 and a jolt string cannot hold one either."
+  (write-char #\" stream)
+  (loop for c across string
+        for code = (char-code c)
+        do (cond ((char= c #\") (write-string "\\\"" stream))
+                 ((char= c #\\) (write-string "\\\\" stream))
+                 ((char= c #\Newline) (write-char c stream))
+                 ((< code #x20) (format stream "\\u~4,'0X" code))
+                 ((<= #xD800 code #xDFFF) (write-char (code-char #xFFFD) stream))
+                 (t (write-char c stream))))
+  (write-char #\" stream))
+
+(defun %ldk-write (x stream)
+  "Write a reply form: lists, keywords, integers, doubles and strings are all
+a reply ever holds."
+  (etypecase x
+    (list (write-char #\( stream)
+          (loop for (item . more) on x
+                do (%ldk-write item stream)
+                   (when more (write-char #\Space stream)))
+          (write-char #\) stream))
+    (keyword (write-char #\: stream)
+             (write-string (string-downcase (symbol-name x)) stream))
+    (integer (format stream "~D" x))
+    (double-float (let ((*read-default-float-format* 'double-float))
+                    (prin1 x stream)))
+    (string (%ldk-write-string x stream))))
+
 (defun %ldk-print-reply (reply)
-  (with-standard-io-syntax
-    (let ((*read-default-float-format* 'double-float)
-          (*print-case* :downcase)
-          (*print-readably* nil)
-          (*package* (find-package :keyword)))
-      (prin1-to-string reply))))
+  (with-output-to-string (s) (%ldk-write reply s)))
 
 (defun %ldk-handle-request (text)
   (%ldk-print-reply
@@ -318,14 +358,20 @@ outside KEYWORD: requests are data."
 (sb-alien:define-alien-callable ldk_entry sb-alien:int
     ((request sb-alien:c-string) (out (* (* sb-alien:char))))
   ;; The reply is malloc'd by make-alien-string; the caller frees it with
-  ;; ldk_free. A non-zero return means not even a reply could be made.
-  (handler-case
-      (progn
-        (setf (sb-alien:deref out)
-              (sb-alien:make-alien-string (%ldk-handle-request request)
-                                          :external-format :utf-8))
-        0)
-    (serious-condition () -1)))
+  ;; ldk_free. If the reply itself cannot be made, say so in an :error reply
+  ;; rather than a bare status, and return -1 only when even that fails.
+  (flet ((send (text)
+           (setf (sb-alien:deref out)
+                 (sb-alien:make-alien-string text :external-format :utf-8))
+           0))
+    (handler-case (send (%ldk-handle-request request))
+      (serious-condition (c)
+        (handler-case
+            (send (%ldk-print-reply
+                   (list :error (format nil "the bridge could not write its reply: ~A"
+                                        (handler-case (princ-to-string c)
+                                          (serious-condition () "unprintable condition"))))))
+          (serious-condition () -1))))))
 
 (defun make-jolt-openldk-core (path)
   "Dump a library core: OpenLDK warmed as its own make-image warms it, no
