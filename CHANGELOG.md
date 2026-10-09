@@ -39,7 +39,7 @@
 
 ## First cut
 
-Merged as PR #1. Nothing is tagged yet.
+Nothing is tagged yet.
 
 - `bridge/build.sh` builds SBCL 2.6.9 with its runtime as a shared library,
   OpenLDK at `23da184e`, a core with the bridge loaded, and the C shim, all
