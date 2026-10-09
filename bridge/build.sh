@@ -31,6 +31,14 @@ esac
 
 die() { echo "build.sh: $*" >&2; exit 1; }
 
+# A failed step's log is a file in $WORK, which CI never shows; print its end.
+die_log() {
+  log=$1; shift
+  echo "build.sh: $* (last 40 lines of $log follow)" >&2
+  [ -f "$log" ] && tail -40 "$log" >&2
+  exit 1
+}
+
 for tool in sbcl ocicl git cc; do
   command -v "$tool" >/dev/null 2>&1 || die "needs $tool on PATH"
 done
@@ -53,9 +61,9 @@ if [ ! -f "$SBCL_SRC/src/runtime/libsbcl.so" ]; then
   # host quits before reading the build script from stdin, and the failure
   # surfaces much later as a missing genesis/sbcl.h.
   (cd "$SBCL_SRC" && ./make.sh --fancy > "$WORK/sbcl-build.log" 2>&1) \
-    || die "SBCL build failed; see $WORK/sbcl-build.log"
+    || die_log "$WORK/sbcl-build.log" "SBCL build failed"
   (cd "$SBCL_SRC" && ./make-shared-library.sh >> "$WORK/sbcl-build.log" 2>&1) \
-    || die "libsbcl build failed; see $WORK/sbcl-build.log"
+    || die_log "$WORK/sbcl-build.log" "libsbcl build failed"
 else
   echo "== SBCL $SBCL_VERSION already built"
 fi
@@ -72,7 +80,7 @@ fi
 # fails with "Unable to establish HTTPS tunnel through proxy"; run the build
 # with the proxy variables unset.
 (cd "$OPENLDK" && ocicl install > "$WORK/ocicl.log" 2>&1) \
-  || die "ocicl install failed; see $WORK/ocicl.log"
+  || die_log "$WORK/ocicl.log" "ocicl install failed"
 
 # OpenLDK's Makefile assumes ~/.sbclrc loads ocicl's runtime. Use ocicl's own
 # init snippet instead of anyone's ~/.sbclrc.
@@ -89,7 +97,7 @@ rm -f "$DIST/openldk.core"
     --load "$HERE/bridge.lisp" \
     --eval "(openldk::make-jolt-openldk-core \"$DIST/openldk.core\")" \
     > "$WORK/core-build.log" 2>&1) \
-  || die "core build failed; see $WORK/core-build.log"
+  || die_log "$WORK/core-build.log" "core build failed"
 [ -f "$DIST/openldk.core" ] || die "no core written; see $WORK/core-build.log"
 
 # --- 3. libsbcl and the shim ---------------------------------------------------
