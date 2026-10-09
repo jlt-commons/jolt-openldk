@@ -55,6 +55,19 @@ public class Fixture {
         try { r.run(); return "no exception"; }
         catch (RuntimeException e) { return "caught: " + e.getMessage(); }
     }
+    public interface Base { int f(); int g(); }
+    public interface Sub extends Base { default int f() { return 7; } }
+    public static int callF(Base b) { return b.f(); }
+    public static int callG(Base b) { return b.g(); }
+    public static void wrap(Runnable r) {
+        try { r.run(); }
+        catch (RuntimeException e) { throw new IllegalStateException("wrapped: " + e.getMessage(), e); }
+    }
+    public static String tryInt(java.util.function.IntSupplier s) {
+        try { return "got " + s.getAsInt(); }
+        catch (RuntimeException e) { return "caught: " + e.getMessage(); }
+    }
+
     private static Runnable stored;
     public static void store(Runnable r) { stored = r; }
     public static void runStored() { stored.run(); }

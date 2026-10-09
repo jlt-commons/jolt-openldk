@@ -391,18 +391,24 @@ every object already has from java.lang.Object.")
 (defun %ldk-abstract-methods (binary)
   "The (name descriptor) pairs a class implementing interface BINARY must
 define: its abstract methods and its superinterfaces', less Object's."
+  ;; Keyed by name and parameters, OpenLDK's own method key, so a covariant
+  ;; redeclaration is one method. A subinterface is walked before its supers
+  ;; and its default methods are marked seen too, so a default that overrides
+  ;; a super's abstract method is left to run rather than shadowed.
   (let ((seen (make-hash-table :test 'equal)) (out '()))
     (labels ((walk (name)
                (let ((class (%ldk-class name)))
                  (unless (interface-p class)
                    (error "~A is a class, not an interface" (substitute #\. #\/ name)))
                  (loop for m across (slot-value class 'methods)
-                       for key = (concatenate 'string (name m) (descriptor m))
-                       when (and (abstract-p m) (not (static-p m))
-                                 (not (member key *ldk-object-methods* :test #'string=))
-                                 (not (gethash key seen)))
+                       for key = (%ldk-method-key (name m) (descriptor m))
+                       unless (or (static-p m)
+                                  (gethash key seen)
+                                  (member (concatenate 'string (name m) (descriptor m))
+                                          *ldk-object-methods* :test #'string=))
                          do (setf (gethash key seen) t)
-                            (push (list (name m) (descriptor m)) out))
+                            (when (abstract-p m)
+                              (push (list (name m) (descriptor m)) out)))
                  (loop for super across (or (slot-value class 'interfaces) #())
                        do (walk super)))))
       (walk binary))
@@ -415,7 +421,8 @@ define: its abstract methods and its superinterfaces', less Object's."
         (let* ((class-sym (intern (format nil "jolt-openldk/Proxy[~{~A~^,~}]" interfaces) :openldk))
                (supers (cons '|java/lang/Object| (mapcar #'%ldk-class-symbol interfaces)))
                (methods (remove-duplicates (mapcan #'%ldk-abstract-methods interfaces)
-                                           :test #'equal :from-end t)))
+                                           :test #'string= :from-end t
+                                           :key (lambda (m) (%ldk-method-key (first m) (second m))))))
           (eval `(defclass ,class-sym ,supers ((fn-id :initarg :fn-id))))
           ;; Object.toString goes through getClass(), and there is no Java
           ;; class behind a class made here, so it would throw
@@ -464,7 +471,7 @@ reply was malloc'd on the far side (ldk_strdup) and is freed here."
                      (sb-sys:vector-sap octets) (sb-alien:addr out)))))
           (when (or (/= rc 0) (zerop (sb-sys:sap-int out)))
             (error "the Clojure callback trampoline failed (status ~D)" rc))
-          (prog1 (%ldk-sap-utf8 out)
+          (unwind-protect (%ldk-sap-utf8 out)
             (sb-alien:alien-funcall
              (sb-alien:extern-alien "ldk_free" (function sb-alien:void sb-sys:system-area-pointer))
              out)))))))
@@ -479,19 +486,37 @@ reply was malloc'd on the far side (ldk_strdup) and is freed here."
   "Run Clojure fn behind PROXY for Java method NAME DESC with ARGS. Objects
 among ARGS reach Clojure as borrowed handles, released when it replies."
   (multiple-value-bind (params ret) (%ldk-split-descriptor desc)
-    (let ((*ldk-borrowed* '()))
+    ;; Only the handles made for ARGS are borrowed. The Clojure fn runs with
+    ;; collection off, so objects it gets from its own calls into Java are its
+    ;; to keep, like any other JavaRef.
+    (let* ((borrowed '())
+           (wire-args (let ((*ldk-borrowed* '()))
+                        (prog1 (mapcar #'%ldk-result params args)
+                          (setf borrowed *ldk-borrowed*)))))
       (unwind-protect
-           (let* ((request (%ldk-print-reply
-                            (list :call (slot-value proxy 'fn-id) name desc
-                                  (mapcar #'%ldk-result params args))))
-                  (reply (%ldk-read-request (%ldk-c-upcall request))))
+           (let* ((*ldk-borrowed* :none)
+                  (reply (%ldk-read-request
+                          (%ldk-c-upcall
+                           (%ldk-print-reply
+                            (list :call (slot-value proxy 'fn-id) name desc wire-args))))))
              (ecase (first reply)
-               (:ok (let ((*ldk-borrowed* :none))
-                      (if (string= ret "V") nil (%ldk-arg ret (second reply)))))
+               (:ok (if (string= ret "V")
+                        nil
+                        ;; A result that does not fit the return type is the
+                        ;; callback's fault, so Java gets an exception it can
+                        ;; catch, not a Lisp error.
+                        (let ((converted nil) (problem nil))
+                          (handler-case (setf converted (%ldk-arg ret (second reply)))
+                            (error (c) (setf problem (princ-to-string c))))
+                          (if problem
+                              (%ldk-throw-runtime
+                               (format nil "jolt-openldk callback ~A~A returned a bad result: ~A"
+                                       name desc problem))
+                              converted))))
                (:throw (%ldk-throw-runtime
                         (format nil "~A [jolt-openldk callback error ~D]" (second reply) (third reply))))
                (:error (%ldk-throw-runtime (second reply)))))
-        (dolist (id *ldk-borrowed*)
+        (dolist (id borrowed)
           (sb-thread:with-mutex (*ldk-handle-lock*) (remhash id *ldk-handles*)))))))
 
 ;;; --- requests ----------------------------------------------------------------

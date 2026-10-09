@@ -93,6 +93,8 @@
   (is (= "(:error \"x\")" (wire/error-reply "x")))
   (is (= 12 (wire/callback-error-id "java.lang.RuntimeException: boom [jolt-openldk callback error 12]")))
   (is (nil? (wire/callback-error-id "plain")))
+  (is (nil? (wire/callback-error-id "wrapped: boom [jolt-openldk callback error 12] and more"))
+      "only at the end of the message")
   (is (nil? (wire/callback-error-id nil))))
 
 (deftest a-java-exception-becomes-ex-info

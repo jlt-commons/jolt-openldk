@@ -137,9 +137,11 @@
   (str "(:error " (lisp-string (str/replace (str message) "\u0000" "")) ")"))
 
 (defn callback-error-id
-  "The error id a callback's RuntimeException carries in its message, or nil."
+  "The error id a callback's RuntimeException carries at the end of its
+  message, or nil. Anchored at the end: a wrapper whose message quotes the
+  original somewhere inside is a different exception."
   [message]
-  (some-> (re-find #"\[jolt-openldk callback error (\d+)\]" (or message "")) second parse-long))
+  (some-> (re-find #"\[jolt-openldk callback error (\d+)\]$" (or message "")) second parse-long))
 
 ;; --- Lisp text -> Clojure -------------------------------------------------------
 

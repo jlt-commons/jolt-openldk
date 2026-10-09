@@ -302,6 +302,17 @@
                                       (fn [x] (ldk/call-static "java.lang.Math" "abs" "(J)J" x)))]
         (is (= 9 (ldk/call-static "Fixture" "apply"
                                   "(Ljava/util/function/Function;Ljava/lang/Object;)Ljava/lang/Object;" f -9)))))
+    (testing "objects the fn gets from its own calls into Java are its to keep"
+      (let [kept (atom nil)]
+        (ldk/with-ref [r (ldk/implement "java.lang.Runnable"
+                                        #(reset! kept (ldk/new-object "java.lang.StringBuilder" "(Ljava/lang/String;)V" "kept")))]
+          (ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r))
+        (is (= "kept" (ldk/to-string @kept)) "still live after the callback returned")
+        (ldk/release! @kept)))
+    (testing "a default method in a subinterface stays the default"
+      (ldk/with-ref [s (ldk/implement "Fixture$Sub" {"g" (constantly 3)})]
+        (is (= 7 (ldk/call-static "Fixture" "callF" "(LFixture$Base;)I" s)) "Sub's default, not a call to Clojure")
+        (is (= 3 (ldk/call-static "Fixture" "callG" "(LFixture$Base;)I" s)))))
     (testing "a thread Java started can call in"
       (let [where (promise)]
         (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(deliver where :ran))]
@@ -319,10 +330,19 @@
       (testing "and when it comes back out to Clojure, the original is rethrown"
         (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw boom))]
           (is (identical? boom (thrown #(ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r)))))))
+    (testing "a wrapper Java throws stays the wrapper, even when it quotes the original"
+      (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw (ex-info "inner" {})))]
+        (let [e (thrown #(ldk/call-static "Fixture" "wrap" "(Ljava/lang/Runnable;)V" r))]
+          (is (= "java.lang.IllegalStateException" (:java/class (ex-data e))))
+          (is (re-find #"^wrapped: inner" (:java/message (ex-data e)))))))
     (testing "a map without the method Java called"
       (ldk/with-ref [it (ldk/implement "java.util.Iterator" {"hasNext" (constantly true)})]
         (is (re-find #"no fn for next\(\)Ljava/lang/Object;"
                      (ex-message (thrown #(ldk/call-static "Fixture" "drain" "(Ljava/util/Iterator;)Ljava/lang/String;" it)))))))
+    (testing "a result of the wrong type is a RuntimeException Java can catch"
+      (ldk/with-ref [s (ldk/implement "java.util.function.IntSupplier" (constantly "not an int"))]
+        (is (re-find #"^caught: jolt-openldk callback getAsInt\(\)I returned a bad result: a string for parameter I"
+                     (ldk/call-static "Fixture" "tryInt" "(Ljava/util/function/IntSupplier;)Ljava/lang/String;" s)))))
     (testing "a result that does not fit the return type"
       (ldk/with-ref [op (ldk/implement "java.util.function.IntBinaryOperator" (fn [_ _] 99999999999))]
         (is (re-find #"does not fit a Java int"

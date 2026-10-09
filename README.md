@@ -116,10 +116,12 @@ Java can call Clojure too. `implement` makes a Java object implementing one or m
 A fn handles every method, which suits a functional interface. A map picks a fn by method name, or by name plus descriptor for an overload. The object passes `checkcast` for its interfaces, and their default methods work, so `Comparator.reversed()` on it calls your `compare`. It's built the way OpenLDK builds classes for Java lambdas: a class made at run time whose superclasses are `Object` and the interfaces, with one method per abstract method.
 
 - Arguments arrive converted like returned values. Objects among them are JavaRefs **borrowed for the call**: they're released when the fn returns, so copy out what you need first.
-- The result converts by the method's return type, the same way an argument would, and a void method ignores it.
+- The result converts by the method's return type, the same way an argument would, and a void method ignores it. A result that doesn't fit is a `RuntimeException` in Java, which Java code can catch.
+- Objects the fn gets from its own calls into Java are ordinary JavaRefs it can keep. Only the arguments are borrowed.
 - If the fn throws, Java gets a `RuntimeException` with its message. If that exception comes back out through the call you made, you get your original throwable back.
-- The fn may call into Java on the same thread. Java threads can call in too, but a fn running on another Java thread while your thread is waiting inside a call must not call into Java: every call takes one lock, and the waiting call holds it.
+- The fn may call into Java on the same thread. Java threads can call in too. Every call from Clojure into Java takes one lock, so a fn on another Java thread that calls into Java waits until your thread's current call finishes. That's a deadlock only when your call is itself waiting for that Java thread, through `join`, a latch or a monitor. In that case the fn must not call into Java.
 - `toString` gives `jolt-openldk proxy for java.util.Comparator #7`, and `hashCode` and `equals` are Object's. None of the three reach Clojure. `getClass()` throws `ClassNotFoundException`, since no Java class stands behind the one made at run time, so Java code that reflects on the object will fail.
+- Like any JavaRef, the object lives until `release!`, along with its fn. A proxy passed inline and never released stays for the life of the process.
 - `release!` on the object drops its fn as well, so Java calling a stored copy later gets a `RuntimeException` rather than a call into a fn that's gone.
 
 A Java exception arrives as an `ex-info`:
@@ -163,7 +165,7 @@ bb test     # wire tests always; the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 ```
 
-Last run: wire tests 11 tests and 64 assertions, OpenLDK tests 17 tests and 141 assertions, all passing.
+Last run: wire tests 11 tests and 65 assertions, OpenLDK tests 17 tests and 147 assertions, all passing.
 
 ## Licence
 

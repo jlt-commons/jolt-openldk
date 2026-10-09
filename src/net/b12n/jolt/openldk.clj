@@ -139,11 +139,13 @@
         (reset! trampoline-addr addr))))
 
 (defn- rethrow-original
-  "If `e` is a Java exception that a callback's throw turned into, the
-  original Clojure throwable, still in the error table; otherwise `e`."
+  "If `e` is the very RuntimeException a callback's throw turned into, the
+  original Clojure throwable, still in the error table; otherwise `e`. Java
+  wrapping it in another exception, even one quoting its message, keeps `e`."
   [e]
-  (let [{:java/keys [message string]} (ex-data e)]
-    (or (some-> (or (wire/callback-error-id message) (wire/callback-error-id string)) take-error!)
+  (let [{:java/keys [class message]} (ex-data e)]
+    (or (when (= "java.lang.RuntimeException" class)
+          (some-> (wire/callback-error-id message) take-error!))
         e)))
 
 (defn- send!
