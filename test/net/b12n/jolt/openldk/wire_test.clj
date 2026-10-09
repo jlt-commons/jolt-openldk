@@ -81,6 +81,20 @@
     (is (= 0xD83D (wire/reply->value "(:ok (:c 55357))")))
     (is (= \a (wire/reply->value "(:ok (:c 97))")))))
 
+(deftest callback-protocol
+  (is (= "(:proxy (\"java.lang.Runnable\" \"java.io.Closeable\") 7)"
+         (wire/proxy-request ["java.lang.Runnable" "java.io.Closeable"] 7)))
+  (is (= {:fn-id 3 :method "compare" :descriptor "(Ljava/lang/Object;Ljava/lang/Object;)I"
+          :args ["a" (wire/->JavaRef 9 "Fixture")]}
+         (wire/parse-call "(:call 3 \"compare\" \"(Ljava/lang/Object;Ljava/lang/Object;)I\" ((:s \"a\") (:ref 9 \"Fixture\")))")))
+  (is (= "(:ok (:i 1))" (wire/ok-reply "(II)I" 1)))
+  (is (= "(:ok (:void))" (wire/ok-reply "()V" {:anything "a void method's result is ignored"})))
+  (is (= "(:throw \"no \\\"good\\\"\" 12)" (wire/throw-reply "no \"good\"" 12)))
+  (is (= "(:error \"x\")" (wire/error-reply "x")))
+  (is (= 12 (wire/callback-error-id "java.lang.RuntimeException: boom [jolt-openldk callback error 12]")))
+  (is (nil? (wire/callback-error-id "plain")))
+  (is (nil? (wire/callback-error-id nil))))
+
 (deftest a-java-exception-becomes-ex-info
   (let [e (try (wire/reply->value
                 "(:throw \"java.lang.IllegalStateException\" \"boom: x\" \"java.lang.IllegalStateException: boom: x\")")

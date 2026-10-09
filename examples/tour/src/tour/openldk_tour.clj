@@ -49,6 +49,19 @@
                    parts (ldk/call s "split" "(Ljava/lang/String;)[Ljava/lang/String;" ",")]
       (show "\"jolt,on,chez\".split(\",\")" (ldk/array->vec parts)))
 
+    (println "\nJava calling Clojure")
+    (ldk/with-ref [by-length (ldk/implement "java.util.Comparator"
+                                            (fn [a b] (compare [(count a) a] [(count b) b])))
+                   words (ldk/new-array "Ljava/lang/String;" ["chez" "on" "jolt" "a" "clojure"])]
+      (ldk/call-static "java.util.Arrays" "sort" "([Ljava/lang/Object;Ljava/util/Comparator;)V" words by-length)
+      (show "Arrays.sort with a Clojure Comparator" (ldk/array->vec words)))
+    (ldk/with-ref [m (ldk/new-object "java.util.TreeMap" "()V")
+                   f (ldk/implement "java.util.function.Function" (fn [k] (count k)))]
+      (doseq [w ["pear" "fig"]]
+        (ldk/call m "computeIfAbsent"
+                  "(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;" w f))
+      (show "TreeMap.computeIfAbsent with a Clojure fn" (ldk/to-string m)))
+
     (println "\na class of our own")
     (ldk/with-ref [c (ldk/new-object "Counter" "(Ljava/lang/String;)V" "apples")]
       (show "add 3, add 4" [(ldk/call c "add" "(J)J" 3) (ldk/call c "add" "(J)J" 4)])

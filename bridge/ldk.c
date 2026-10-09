@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0 */
 
 /*
- * The C side of jolt-openldk: three functions jolt binds by name.
+ * The C side of jolt-openldk: the functions jolt binds by name.
  *
- *   int  ldk_init(const char *core)              start SBCL on the OpenLDK core, once
- *   int  ldk_call(const char *request, char **reply)
- *   void ldk_free(char *reply)
+ *   int   ldk_init(const char *core)             start SBCL on the OpenLDK core, once
+ *   int   ldk_call(const char *request, char **reply)
+ *   void  ldk_free(char *reply)
+ *   void  ldk_set_upcall(void *fn)               install jolt's callback, for Java calling Clojure
+ *   char *ldk_strdup(const char *s)              a reply the callback hands back, freed by ldk_free
  *
  * The Lisp side (bridge.lisp) defines the alien callable LDK_ENTRY, and the
  * core is saved with :callable-exports '(ldk_entry). When initialize_lisp
@@ -19,6 +21,7 @@
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define EXPORT __attribute__((visibility("default")))
 
@@ -70,3 +73,18 @@ EXPORT int ldk_call(const char *request, char **reply) {
 }
 
 EXPORT void ldk_free(char *reply) { free(reply); }
+
+/*
+ * The other direction: Java calling Clojure. jolt installs one ffi/callback
+ * here; bridge.lisp calls it with a request and gets back a reply that the
+ * callback made with ldk_strdup, which bridge.lisp then frees with ldk_free.
+ * Allocating through this library on both sides means the reply is freed by
+ * the malloc that made it, whatever jolt's own allocator is.
+ */
+EXPORT int (*ldk_upcall)(const char *request, char **reply) = 0;
+
+EXPORT void ldk_set_upcall(void *fn) {
+  ldk_upcall = (int (*)(const char *, char **))fn;
+}
+
+EXPORT char *ldk_strdup(const char *s) { return strdup(s); }

@@ -20,6 +20,12 @@
 ;;;   (:new-array "I" (v ...))                  (:ok (:ref id "[I"))
 ;;;   (:elements id)                            (:ok (:vec v ...))
 ;;;   (:length id)                              (:ok (:i n))
+;;;   (:proxy ("java/util/Comparator") fn-id)   (:ok (:ref id "jolt-openldk.Proxy..."))
+;;;
+;;; The other direction, Java calling Clojure, goes through the C function
+;;; pointer ldk_upcall that jolt installs: (:call fn-id "compare" "(..)I"
+;;; (v ...)) out, and (:ok v), (:throw "message" error-id) or (:error "msg")
+;;; back.
 ;;;   (:release id)                             (:ok (:void))
 ;;;
 ;;; Values: (:i n) (:d x) (:nan) (:inf 1|-1) (:z :true|:false) (:c code) (:s "text")
@@ -84,11 +90,17 @@ return type: add(II)."
 (defvar *ldk-next-handle* 0)
 (defvar *ldk-handle-lock* (sb-thread:make-mutex :name "jolt-openldk handles"))
 
+(defvar *ldk-borrowed* :none
+  "While a callback's arguments are converted, a list collecting the handles
+made for them, released once Clojure has replied. :none outside a callback.")
+
 (defun %ldk-handle (object)
-  (sb-thread:with-mutex (*ldk-handle-lock*)
-    (let ((id (incf *ldk-next-handle*)))
-      (setf (gethash id *ldk-handles*) object)
-      id)))
+  (let ((id (sb-thread:with-mutex (*ldk-handle-lock*)
+              (let ((id (incf *ldk-next-handle*)))
+                (setf (gethash id *ldk-handles*) object)
+                id))))
+    (unless (eq *ldk-borrowed* :none) (push id *ldk-borrowed*))
+    id))
 
 (defun %ldk-deref (id)
   (multiple-value-bind (object found)
@@ -351,6 +363,137 @@ Strings built by JSTRING store unsigned bytes, which is why only some fail."
     ((#\F #\D) (%ldk-double value))
     (t (%ldk-object value))))
 
+;;; --- callbacks: Java calling Clojure ----------------------------------------
+;;;
+;;; A proxy is an instance of a class made here at run time, the way OpenLDK
+;;; makes classes for Java lambdas (%ensure-dynamic-lambda-class): its
+;;; superclasses are java/lang/Object and the interfaces, so CHECKCAST and
+;;; INSTANCEOF pass, and each abstract method is a method on the generic
+;;; function OpenLDK dispatches that Java method through. The method sends the
+;;; call to Clojure as text through ldk_upcall and converts the reply by the
+;;; method's return type.
+
+(defparameter *ldk-object-methods*
+  '("equals(Ljava/lang/Object;)Z" "hashCode()I" "toString()Ljava/lang/String;")
+  "Methods an interface may redeclare abstract (Comparator does equals) that
+every object already has from java.lang.Object.")
+
+(defvar *ldk-proxy-classes* (make-hash-table :test 'equal))
+(defvar *ldk-proxy-lock* (sb-thread:make-mutex :name "jolt-openldk proxies"))
+
+(defun %ldk-class-symbol (binary)
+  "The CLOS class symbol OpenLDK uses for loaded class BINARY (slashed)."
+  (%ldk-class binary)
+  (let ((sym (or (let ((s (find-symbol binary :openldk))) (and s (find-class s nil) s))
+                 (let ((s (find-symbol binary (class-package binary)))) (and s (find-class s nil) s)))))
+    (or sym (error "no CLOS class for ~A" binary))))
+
+(defun %ldk-abstract-methods (binary)
+  "The (name descriptor) pairs a class implementing interface BINARY must
+define: its abstract methods and its superinterfaces', less Object's."
+  (let ((seen (make-hash-table :test 'equal)) (out '()))
+    (labels ((walk (name)
+               (let ((class (%ldk-class name)))
+                 (unless (interface-p class)
+                   (error "~A is a class, not an interface" (substitute #\. #\/ name)))
+                 (loop for m across (slot-value class 'methods)
+                       for key = (concatenate 'string (name m) (descriptor m))
+                       when (and (abstract-p m) (not (static-p m))
+                                 (not (member key *ldk-object-methods* :test #'string=))
+                                 (not (gethash key seen)))
+                         do (setf (gethash key seen) t)
+                            (push (list (name m) (descriptor m)) out))
+                 (loop for super across (or (slot-value class 'interfaces) #())
+                       do (walk super)))))
+      (walk binary))
+    (nreverse out)))
+
+(defun %ldk-proxy-class (interfaces)
+  "The proxy class for INTERFACES (slashed names), made once and cached."
+  (sb-thread:with-mutex (*ldk-proxy-lock*)
+    (or (gethash interfaces *ldk-proxy-classes*)
+        (let* ((class-sym (intern (format nil "jolt-openldk/Proxy[~{~A~^,~}]" interfaces) :openldk))
+               (supers (cons '|java/lang/Object| (mapcar #'%ldk-class-symbol interfaces)))
+               (methods (remove-duplicates (mapcan #'%ldk-abstract-methods interfaces)
+                                           :test #'equal :from-end t)))
+          (eval `(defclass ,class-sym ,supers ((fn-id :initarg :fn-id))))
+          ;; Object.toString goes through getClass(), and there is no Java
+          ;; class behind a class made here, so it would throw
+          ;; ClassNotFoundException wherever Java prints or logs a proxy.
+          (let ((label (format nil "jolt-openldk proxy for ~{~A~^, ~}"
+                               (mapcar (lambda (i) (substitute #\. #\/ i)) interfaces))))
+            (eval `(defmethod |toString()| ((|this| ,class-sym))
+                     (jstring (format nil "~A #~D" ,label (slot-value |this| 'fn-id))))))
+          (loop for (name desc) in methods
+                for gf = (intern (lispize-method-name (concatenate 'string name desc)) :openldk)
+                for params = (loop for i below (length (%ldk-split-descriptor desc))
+                                   collect (intern (format nil "P~D" i) :openldk))
+                do (unless (and (fboundp gf) (typep (fdefinition gf) 'generic-function))
+                     (ensure-generic-function gf :generic-function-class 'java-generic-function
+                                                 :lambda-list (cons '|this| params)))
+                   (eval `(defmethod ,gf ((|this| ,class-sym) ,@params)
+                            (%ldk-upcall |this| ,name ,desc (list ,@params)))))
+          (setf (gethash interfaces *ldk-proxy-classes*) class-sym)))))
+
+(defun %ldk-new-proxy (interfaces fn-id)
+  (let* ((binaries (mapcar (lambda (i) (substitute #\/ #\. i)) interfaces))
+         (object (make-instance (%ldk-proxy-class binaries) :fn-id fn-id)))
+    (list :ref (%ldk-handle object) (%ldk-class-dotted object))))
+
+(defun %ldk-sap-utf8 (sap)
+  "The NUL-terminated UTF-8 string at SAP."
+  (let ((n (loop for i from 0 until (zerop (sb-sys:sap-ref-8 sap i)) finally (return i)))
+        (octets nil))
+    (setf octets (make-array n :element-type '(unsigned-byte 8)))
+    (dotimes (i n) (setf (aref octets i) (sb-sys:sap-ref-8 sap i)))
+    (sb-ext:octets-to-string octets :external-format :utf-8)))
+
+(defun %ldk-c-upcall (text)
+  "Send TEXT to Clojure through ldk_upcall and return its reply text. The
+reply was malloc'd on the far side (ldk_strdup) and is freed here."
+  (let ((fp (sb-alien:extern-alien "ldk_upcall" sb-sys:system-area-pointer)))
+    (when (zerop (sb-sys:sap-int fp))
+      (error "no Clojure callback is installed (ldk_upcall is null)"))
+    (let ((octets (sb-ext:string-to-octets text :external-format :utf-8 :null-terminate t)))
+      (sb-alien:with-alien ((out sb-sys:system-area-pointer))
+        (setf out (sb-sys:int-sap 0))
+        (let ((rc (sb-sys:with-pinned-objects (octets)
+                    (sb-alien:alien-funcall
+                     (sb-alien:sap-alien fp (function sb-alien:int sb-sys:system-area-pointer
+                                                      (* sb-sys:system-area-pointer)))
+                     (sb-sys:vector-sap octets) (sb-alien:addr out)))))
+          (when (or (/= rc 0) (zerop (sb-sys:sap-int out)))
+            (error "the Clojure callback trampoline failed (status ~D)" rc))
+          (prog1 (%ldk-sap-utf8 out)
+            (sb-alien:alien-funcall
+             (sb-alien:extern-alien "ldk_free" (function sb-alien:void sb-sys:system-area-pointer))
+             out)))))))
+
+(defun %ldk-throw-runtime (message)
+  (%ldk-class "java/lang/RuntimeException")
+  (let ((exc (%make-java-instance "java/lang/RuntimeException")))
+    (|<init>(Ljava/lang/String;)| exc (jstring message))
+    (error (%lisp-condition exc))))
+
+(defun %ldk-upcall (proxy name desc args)
+  "Run Clojure fn behind PROXY for Java method NAME DESC with ARGS. Objects
+among ARGS reach Clojure as borrowed handles, released when it replies."
+  (multiple-value-bind (params ret) (%ldk-split-descriptor desc)
+    (let ((*ldk-borrowed* '()))
+      (unwind-protect
+           (let* ((request (%ldk-print-reply
+                            (list :call (slot-value proxy 'fn-id) name desc
+                                  (mapcar #'%ldk-result params args))))
+                  (reply (%ldk-read-request (%ldk-c-upcall request))))
+             (ecase (first reply)
+               (:ok (let ((*ldk-borrowed* :none))
+                      (if (string= ret "V") nil (%ldk-arg ret (second reply)))))
+               (:throw (%ldk-throw-runtime
+                        (format nil "~A [jolt-openldk callback error ~D]" (second reply) (third reply))))
+               (:error (%ldk-throw-runtime (second reply)))))
+        (dolist (id *ldk-borrowed*)
+          (sb-thread:with-mutex (*ldk-handle-lock*) (remhash id *ldk-handles*)))))))
+
 ;;; --- requests ----------------------------------------------------------------
 
 (defun %ldk-invoke (receiver name desc values)
@@ -413,7 +556,9 @@ Strings built by JSTRING store unsigned bytes, which is why only some fail."
       (:new-array (destructuring-bind (component values) rest
                     (%ldk-object (%ldk-make-array component values))))
       (:elements (%ldk-elements (%ldk-array (first rest))))
-      (:length (list :i (length (java-array-data (%ldk-array (first rest)))))))))
+      (:length (list :i (length (java-array-data (%ldk-array (first rest))))))
+      (:proxy (destructuring-bind (interfaces fn-id) rest
+                (%ldk-new-proxy interfaces fn-id))))))
 
 (defun %ldk-throwable-reply (condition)
   (let ((throwable (and (slot-boundp condition '|objref|) (slot-value condition '|objref|))))

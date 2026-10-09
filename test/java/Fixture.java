@@ -36,6 +36,29 @@ public class Fixture {
     public static int[] none() { return new int[0]; }
     public static String boxedInt(Integer i) { return i.getClass().getName() + ":" + i; }
 
+    // Callbacks: Java calling Clojure through interfaces.
+    public static void run(Runnable r) { r.run(); }
+    public static String twice(java.util.function.Supplier<String> s) { return s.get() + s.get(); }
+    public static int applyInt(java.util.function.IntBinaryOperator op, int a, int b) { return op.applyAsInt(a, b); }
+    public static Object apply(java.util.function.Function<Object, Object> f, Object x) { return f.apply(x); }
+    public static String drain(java.util.Iterator<String> it) {
+        StringBuilder sb = new StringBuilder();
+        while (it.hasNext()) sb.append(it.next()).append(';');
+        return sb.toString();
+    }
+    public static void onThread(Runnable r) throws InterruptedException {
+        Thread t = new Thread(r);
+        t.start();
+        t.join();
+    }
+    public static String tryRun(Runnable r) {
+        try { r.run(); return "no exception"; }
+        catch (RuntimeException e) { return "caught: " + e.getMessage(); }
+    }
+    private static Runnable stored;
+    public static void store(Runnable r) { stored = r; }
+    public static void runStored() { stored.run(); }
+
     private int count;
     public Fixture(int start) { count = start; }
     public int bump() { return ++count; }

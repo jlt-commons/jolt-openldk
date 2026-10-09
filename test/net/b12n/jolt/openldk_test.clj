@@ -260,6 +260,91 @@
                              (ldk/call s "split" "(Ljava/lang/String;)[Ljava/lang/String;" ","))]
         (is (= ["a" "b" "c"] (ldk/array->vec parts)))))))
 
+(deftest java-calls-clojure-through-interfaces
+  (when-built
+    (ldk/init! {:classpath classes})
+    (testing "a Runnable"
+      (let [ran (atom 0)]
+        (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(swap! ran inc))]
+          (ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r)
+          (ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r))
+        (is (= 2 @ran))))
+    (testing "results convert by the method's return type"
+      (ldk/with-ref [s (ldk/implement "java.util.function.Supplier" (constantly "ab"))]
+        (is (= "abab" (ldk/call-static "Fixture" "twice" "(Ljava/util/function/Supplier;)Ljava/lang/String;" s))))
+      (ldk/with-ref [op (ldk/implement "java.util.function.IntBinaryOperator" (fn [a b] (* a b)))]
+        (is (= 42 (ldk/call-static "Fixture" "applyInt" "(Ljava/util/function/IntBinaryOperator;II)I" op 6 7)))))
+    (testing "a Comparator drives the JDK's sort, and a default method runs our compare"
+      (ldk/with-ref [desc (ldk/implement "java.util.Comparator" (fn [a b] (compare b a)))
+                     xs (ldk/new-array "Ljava/lang/String;" ["b" "c" "a"])]
+        (ldk/call-static "java.util.Arrays" "sort" "([Ljava/lang/Object;Ljava/util/Comparator;)V" xs desc)
+        (is (= ["c" "b" "a"] (ldk/array->vec xs)))
+        (ldk/with-ref [asc (ldk/call desc "reversed" "()Ljava/util/Comparator;")]
+          (ldk/call-static "java.util.Arrays" "sort" "([Ljava/lang/Object;Ljava/util/Comparator;)V" xs asc)
+          (is (= ["a" "b" "c"] (ldk/array->vec xs))))))
+    (testing "a map implements several methods"
+      (let [items (atom ["x" "y"])]
+        (ldk/with-ref [it (ldk/implement "java.util.Iterator"
+                                         {"hasNext" (fn [] (boolean (seq @items)))
+                                          "next" (fn [] (let [v (first @items)] (swap! items rest) v))})]
+          (is (= "x;y;" (ldk/call-static "Fixture" "drain" "(Ljava/util/Iterator;)Ljava/lang/String;" it))))))
+    (testing "object arguments are borrowed handles, usable during the call only"
+      (let [seen (atom nil)]
+        (ldk/with-ref [f (ldk/implement "java.util.function.Function"
+                                        (fn [x] (reset! seen x) (ldk/to-string x)))
+                       fx (ldk/new-object "Fixture" "(I)V" 5)]
+          (is (= "Fixture(5)" (ldk/call-static "Fixture" "apply"
+                                               "(Ljava/util/function/Function;Ljava/lang/Object;)Ljava/lang/Object;" f fx)))
+          (is (ldk/ref? @seen))
+          (is (thrown? Exception (ldk/to-string @seen)) "released once the fn returned"))))
+    (testing "a scalar argument arrives as a value, and the fn may call back into Java"
+      (ldk/with-ref [f (ldk/implement "java.util.function.Function"
+                                      (fn [x] (ldk/call-static "java.lang.Math" "abs" "(J)J" x)))]
+        (is (= 9 (ldk/call-static "Fixture" "apply"
+                                  "(Ljava/util/function/Function;Ljava/lang/Object;)Ljava/lang/Object;" f -9)))))
+    (testing "a thread Java started can call in"
+      (let [where (promise)]
+        (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(deliver where :ran))]
+          (ldk/call-static "Fixture" "onThread" "(Ljava/lang/Runnable;)V" r))
+        (is (= :ran (deref where 5000 :timed-out)))))))
+
+(deftest callback-exceptions-cross-both-ways
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [boom (ex-info "boom from clojure" {:k 1})]
+      (testing "Java sees a RuntimeException with the message"
+        (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw boom))]
+          (is (re-find #"^caught: boom from clojure"
+                       (ldk/call-static "Fixture" "tryRun" "(Ljava/lang/Runnable;)Ljava/lang/String;" r)))))
+      (testing "and when it comes back out to Clojure, the original is rethrown"
+        (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw boom))]
+          (is (identical? boom (thrown #(ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r)))))))
+    (testing "a map without the method Java called"
+      (ldk/with-ref [it (ldk/implement "java.util.Iterator" {"hasNext" (constantly true)})]
+        (is (re-find #"no fn for next\(\)Ljava/lang/Object;"
+                     (ex-message (thrown #(ldk/call-static "Fixture" "drain" "(Ljava/util/Iterator;)Ljava/lang/String;" it)))))))
+    (testing "a result that does not fit the return type"
+      (ldk/with-ref [op (ldk/implement "java.util.function.IntBinaryOperator" (fn [_ _] 99999999999))]
+        (is (re-find #"does not fit a Java int"
+                     (ex-message (thrown #(ldk/call-static "Fixture" "applyInt" "(Ljava/util/function/IntBinaryOperator;II)I" op 1 2)))))))
+    (testing "a released proxy refuses, rather than calling a fn that is gone"
+      (let [r (ldk/implement "java.lang.Runnable" (fn [] nil))]
+        (ldk/call-static "Fixture" "store" "(Ljava/lang/Runnable;)V" r)
+        (ldk/release! r)
+        (is (re-find #"was released" (ex-message (thrown #(ldk/call-static "Fixture" "runStored" "()V")))))))
+    (testing "a proxy prints, for Java code that logs or concatenates it"
+      (ldk/with-ref [r (ldk/implement "java.lang.Runnable" (fn [] nil))]
+        (is (re-find #"^jolt-openldk proxy for java.lang.Runnable #\d+$" (ldk/to-string r)))
+        (is (re-find #"^jolt-openldk proxy for java.lang.Runnable"
+                     (ldk/call-static "java.lang.String" "valueOf" "(Ljava/lang/Object;)Ljava/lang/String;" r))
+            "Java's own String.valueOf, which calls toString")
+        (is (re-find #"ClassNotFoundException"
+                     (ex-message (thrown #(ldk/call r "getClass" "()Ljava/lang/Class;"))))
+            "getClass() is the documented gap")))
+    (testing "only interfaces can be implemented"
+      (is (re-find #"is a class, not an interface"
+                   (ex-message (thrown #(ldk/implement "java.util.ArrayList" (fn [] nil)))))))))
+
 (deftest another-thread-can-call
   (when-built
    (ldk/init! {:classpath classes})

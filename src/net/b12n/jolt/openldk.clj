@@ -37,6 +37,8 @@
 ;; arena-owned pointers.
 (ffi/defcfn ^:private ldk-call "ldk_call" [:pointer :pointer] :int :blocking)
 (ffi/defcfn ^:private ldk-free "ldk_free" [:pointer] :void)
+(ffi/defcfn ^:private ldk-set-upcall "ldk_set_upcall" [:pointer] :void)
+(ffi/defcfn ^:private ldk-strdup "ldk_strdup" [:pointer] :pointer)
 
 (def ^:private ext
   (if (str/includes? (System/getProperty "os.name") "Mac") "dylib" "so"))
@@ -61,6 +63,89 @@
 (defonce ^:private state (atom nil))
 (def ^:private call-lock (Object.))
 
+;; --- Java calling Clojure: the fn table, the error table, the trampoline ------------
+;;
+;; One ffi/callback, made at startup and handed to the shim, carries every call
+;; Java makes into Clojure. A proxy names its fn by id. A fn that throws leaves
+;; its throwable here under an error id that Java's RuntimeException carries in
+;; its message, so when that exception comes back out through a call, the
+;; original is rethrown. The table keeps the newest 256, because Java may
+;; swallow the exception and never bring it back.
+
+(def ^:private error-table-bound 256)
+(defonce ^:private next-id (atom 0))
+(defonce ^:private fns (atom {}))
+(defonce ^:private errors (atom (sorted-map)))
+
+(defn- keep-error! [t]
+  (let [id (swap! next-id inc)]
+    (swap! errors (fn [m]
+                    (let [m (assoc m id t)]
+                      (if (> (count m) error-table-bound) (dissoc m (first (keys m))) m))))
+    id))
+
+(defn- take-error! [id]
+  (let [t (get @errors id)]
+    (swap! errors dissoc id)
+    t))
+
+(defn- dispatch
+  "The fn registered as `fn-id` for Java `method` `descriptor`: a map is looked
+  up by \"name(descriptor)\", then by name; a fn takes every method."
+  [fn-id method descriptor]
+  (let [impl (get @fns fn-id)]
+    (cond
+      (nil? impl) (throw (ex-info (str "callback " fn-id " was released") {:fn-id fn-id}))
+      (map? impl) (or (get impl (str method descriptor))
+                      (get impl method)
+                      (throw (ex-info (str "no fn for " method descriptor " in the implementation map")
+                                      {:method method :descriptor descriptor})))
+      :else impl)))
+
+(defn- answer
+  "The reply text for one callback request. Nothing escapes."
+  [request]
+  (try
+    (let [{:keys [fn-id method descriptor args]} (wire/parse-call request)
+          f (dispatch fn-id method descriptor)]
+      (try
+        (wire/ok-reply descriptor (apply f args))
+        (catch Throwable t
+          (wire/throw-reply (or (ex-message t) (str t)) (keep-error! t)))))
+    (catch Throwable t
+      (wire/error-reply (str "jolt-openldk callback: " (or (ex-message t) t))))))
+
+(defn- upcall-trampoline
+  "The body of the one ffi/callback: read a request, write a reply the shim
+  allocated (ldk_strdup), so bridge.lisp frees it with the same malloc."
+  [request-ptr out-ptr]
+  (try
+    (let [reply (answer (ffi/ptr->string request-ptr))]
+      (ffi/with-arena [a]
+        (ffi/write out-ptr :pointer (ldk-strdup (ffi/string->ptr a reply)) 0))
+      0)
+    (catch Throwable _ 1)))
+
+(defonce ^:private trampoline-addr (atom nil))
+
+(defn- install-trampoline!
+  "Make the callback once and hand it to the shim. :collect-safe because Java
+  threads OpenLDK started call it too, and jolt never started those."
+  []
+  (or @trampoline-addr
+      (let [cb (ffi/callback (ffi/global-arena) upcall-trampoline [:pointer :pointer] :int :collect-safe)
+            addr (if (integer? cb) cb (ffi/address cb))]
+        (ldk-set-upcall addr)
+        (reset! trampoline-addr addr))))
+
+(defn- rethrow-original
+  "If `e` is a Java exception that a callback's throw turned into, the
+  original Clojure throwable, still in the error table; otherwise `e`."
+  [e]
+  (let [{:java/keys [message string]} (ex-data e)]
+    (or (some-> (or (wire/callback-error-id message) (wire/callback-error-id string)) take-error!)
+        e)))
+
 (defn- send!
   "One request across, one reply back, decoded."
   [request]
@@ -73,7 +158,8 @@
                           {:rc rc :request request})))
         (let [p (ffi/read out :pointer 0)
               text (try (ffi/ptr->string p) (finally (ldk-free p)))]
-          (wire/reply->value text))))))
+          (try (wire/reply->value text)
+               (catch Exception e (throw (rethrow-original e)))))))))
 
 (defn- classpath-string [cp]
   (cond (nil? cp) "."
@@ -130,6 +216,7 @@
       (when-not (#{0 1} rc)
         (throw (ex-info (str "jolt-openldk: ldk_init failed: " (init-codes rc (str "status " rc)))
                         {:rc rc :dist dist}))))
+    (install-trampoline!)
     (send! (wire/setup classpath))
     (reset! state {:phase :ready :classpath classpath :dist dist})
     (catch Exception e
@@ -223,10 +310,46 @@
 
 (defn release!
   "Let OpenLDK collect the object behind `obj`. Using it afterwards, or
-  releasing it twice, throws."
+  releasing it twice, throws. Releasing a proxy from `implement` also drops
+  its fn, so Java calling it later gets a RuntimeException."
   [obj]
-  (when (ref? obj) (send! (wire/release obj)))
+  (when (ref? obj)
+    (try (send! (wire/release obj))
+         (finally (when-let [id (:fn-id obj)] (swap! fns dissoc id)))))
   nil)
+
+;; --- Java calling Clojure ---------------------------------------------------------------
+
+(defn implement
+  "A Java object implementing `interfaces` (one name, or a vector of them) whose
+  methods call Clojure, as a JavaRef to pass wherever Java wants one.
+
+  `impl` is a fn, called with the method's arguments for every method (the
+  usual case, a functional interface such as Runnable or Comparator), or a map
+  from method name, or name plus descriptor for an overload, to fn:
+
+    (implement \"java.util.Comparator\" (fn [a b] (compare b a)))
+    (implement \"java.util.Iterator\" {\"hasNext\" (fn [] ...) \"next\" (fn [] ...)})
+
+  Arguments arrive converted like returned values. Objects among them are
+  JavaRefs borrowed for the call only: they are released when the fn returns,
+  so copy what you need out of them first. The fn's result converts by the
+  method's return type, like an argument. If the fn throws, Java sees a
+  RuntimeException carrying its message, and if that exception comes back out
+  through the call Clojure made, the original throwable is rethrown.
+
+  The fn may call back into Java on the same thread. A fn that Java runs on
+  another thread while this one waits inside a call must not call into Java:
+  calls take one lock, and the waiting call holds it."
+  [interfaces impl]
+  (let [ifaces (if (string? interfaces) [interfaces] (vec interfaces))
+        id (swap! next-id inc)]
+    (swap! fns assoc id impl)
+    (try
+      (assoc (send! (wire/proxy-request ifaces id)) :fn-id id)
+      (catch Throwable t
+        (swap! fns dissoc id)
+        (throw t)))))
 
 (defmacro with-ref
   "Bind each name to a JavaRef-producing expression, run body, and release

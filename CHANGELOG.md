@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Java calling Clojure. `implement` makes a Java object implementing one or
+  more interfaces whose methods run Clojure fns, through one jolt
+  `ffi/callback` installed at startup (`ldk_set_upcall`). Default methods
+  work, object arguments are borrowed for the call, a thrown Clojure
+  exception reaches Java as a RuntimeException and comes back out as the
+  original, and threads Java starts can call in. About 49 µs per callback.
+
 - Licensed. `bridge/bridge.lisp` is GPL-3.0-or-later with the Classpath
   exception, like OpenLDK; everything else is EPL-2.0 with GPL-2.0-or-later
   plus the Classpath exception as a Secondary License. `NOTICE` maps files

@@ -29,7 +29,7 @@ The reasons to want it anyway are narrower. Nothing here starts a JVM, so there 
 
 ```
 jolt process
-  net.b12n.jolt.openldk     Clojure API: init!, call-static, new-object, call, release!
+  net.b12n.jolt.openldk     Clojure API: init!, call-static, new-object, call, implement, release!
   net.b12n.jolt.openldk.wire     request text out, reply text back (pure, tested alone)
         │  ldk_call(request, &reply)        jolt.ffi, by name
         ▼
@@ -102,6 +102,26 @@ Arrays go in as vectors and come back as handles, because an array is mutable an
 
 `array->vec` converts by component type: `int[]` and `long[]` to integers, `byte[]` to signed integers as in Java, `boolean[]` to booleans, `char[]` to chars, `String[]` to strings. `Object[]` elements convert like returned values, so strings and boxed scalars become values and any other object, a nested array included, becomes a JavaRef to release. Only a vector is taken for an array, never a seq. A `float[]` reads back widened to double, so `0.1f` arrives as `0.10000000149011612`, the same as a returned `float`. A vector inside an `Object[]` is refused, since nothing says what array it should become: build it with `new-array` and put the handle in instead. Descriptors, for `new-array` and in method descriptors, are parsed strictly, so `int`, `V` or a dotted `Ljava.lang.String;` is an error rather than a strange array.
 
+Java can call Clojure too. `implement` makes a Java object implementing one or more interfaces whose methods run Clojure fns:
+
+```clojure
+(ldk/with-ref [desc (ldk/implement "java.util.Comparator" (fn [a b] (compare b a)))
+               xs   (ldk/new-array "Ljava/lang/String;" ["b" "c" "a"])]
+  (ldk/call-static "java.util.Arrays" "sort" "([Ljava/lang/Object;Ljava/util/Comparator;)V" xs desc)
+  (ldk/array->vec xs))                            ;=> ["c" "b" "a"]
+
+(ldk/implement "java.util.Iterator" {"hasNext" (fn [] ...) "next" (fn [] ...)})
+```
+
+A fn handles every method, which suits a functional interface. A map picks a fn by method name, or by name plus descriptor for an overload. The object passes `checkcast` for its interfaces, and their default methods work, so `Comparator.reversed()` on it calls your `compare`. It's built the way OpenLDK builds classes for Java lambdas: a class made at run time whose superclasses are `Object` and the interfaces, with one method per abstract method.
+
+- Arguments arrive converted like returned values. Objects among them are JavaRefs **borrowed for the call**: they're released when the fn returns, so copy out what you need first.
+- The result converts by the method's return type, the same way an argument would, and a void method ignores it.
+- If the fn throws, Java gets a `RuntimeException` with its message. If that exception comes back out through the call you made, you get your original throwable back.
+- The fn may call into Java on the same thread. Java threads can call in too, but a fn running on another Java thread while your thread is waiting inside a call must not call into Java: every call takes one lock, and the waiting call holds it.
+- `toString` gives `jolt-openldk proxy for java.util.Comparator #7`, and `hashCode` and `equals` are Object's. None of the three reach Clojure. `getClass()` throws `ClassNotFoundException`, since no Java class stands behind the one made at run time, so Java code that reflects on the object will fail.
+- `release!` on the object drops its fn as well, so Java calling a stored copy later gets a `RuntimeException` rather than a call into a fn that's gone.
+
 A Java exception arrives as an `ex-info`:
 
 ```clojure
@@ -122,12 +142,14 @@ On the machine above, 2026-10-09:
 - Starting SBCL on the core (`ldk_init`) took 47 ms. The tour's whole `init!`, which adds OpenLDK's classpath setup, took 244 ms.
 - A call that is already compiled: about 87 µs (2,000 `Math.max` calls in 175 ms). Nobody has profiled where that goes. The request and reply text is the obvious suspect, and a binary encoding would be the first thing to try if it ever matters.
 - A method's first call pays for its JIT translation. That is OpenLDK's cost and runs from milliseconds to seconds depending on how much of the JDK the method pulls in.
+- A callback from Java into Clojure: about 49 µs (a `Comparator` sort of 1,000 strings made 8,528 calls in 419 ms, sorting correctly).
 - jolt keeps working around it. Its collector, its other threads, and Ctrl-C (exit 130, the same as without OpenLDK) all behaved normally. A call from a second jolt thread works too.
 
 ## What doesn't work yet
 
 - **Bulk arrays.** Every element crosses as text. Measured with 100,000 elements, a `byte[]` or an `int[]` took about 60 ms to build from a vector and 260 to 330 ms to read back across two runs, and came back equal. A million `int`s took 0.7 s in and 3.4 s out. Fine for configuration, slow for image data.
-- **Java calling back into Clojure.** No interface can be implemented from Clojure, so no callbacks, listeners or lambdas.
+- **Implementing a class.** `implement` takes interfaces only. Subclassing an abstract class from Clojure isn't supported.
+- **Wrapped callback exceptions.** The original Clojure throwable comes back only when the `RuntimeException` itself reaches your call. If Java wraps it in another exception first, you get the wrapper as an `ex-info`.
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
 - **JavaRef arguments aren't class-checked.** Scalars, strings and vectors are checked against the parameter type, but a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
@@ -141,7 +163,7 @@ bb test     # wire tests always; the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 ```
 
-Last run: wire tests 10 tests and 55 assertions, OpenLDK tests 15 tests and 121 assertions, all passing.
+Last run: wire tests 11 tests and 64 assertions, OpenLDK tests 17 tests and 141 assertions, all passing.
 
 ## Licence
 

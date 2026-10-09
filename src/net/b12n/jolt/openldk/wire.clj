@@ -98,6 +98,49 @@
 
 (defn array-length [r] (str "(:length " (:handle r) ")"))
 
+(defn proxy-request [interfaces fn-id]
+  (str "(:proxy (" (str/join " " (map lisp-string interfaces)) ") " fn-id ")"))
+
+;; --- Java calling Clojure ----------------------------------------------------------
+;;
+;; bridge.lisp sends (:call fn-id "compare" "(Ljava/lang/Object;Ljava/lang/Object;)I"
+;; (v ...)), printed by the same printer as its replies, and reads back one of
+;; the three replies below with its request reader.
+
+(declare lisp->value)
+
+(defn parse-call
+  "The callback request `text` as {:fn-id :method :descriptor :args}, the
+  arguments decoded as reply values are."
+  [text]
+  (let [[tag fn-id method descriptor args :as form] (edn/read-string text)]
+    (when-not (= :call tag)
+      (throw (ex-info "jolt-openldk: not a callback request" {:form form})))
+    {:fn-id fn-id :method method :descriptor descriptor :args (mapv lisp->value args)}))
+
+(defn ok-reply
+  "A callback's result. A void method's result is ignored rather than encoded,
+  so a fn may return anything there."
+  [descriptor v]
+  (if (str/ends-with? descriptor ")V")
+    "(:ok (:void))"
+    (str "(:ok " (value->lisp v) ")")))
+
+(defn throw-reply
+  "Tell Java the callback threw: it raises a RuntimeException carrying
+  `message` and `error-id`, by which the original is found again if the
+  exception comes back out to Clojure."
+  [message error-id]
+  (str "(:throw " (lisp-string (str/replace (str message) "\u0000" "")) " " error-id ")"))
+
+(defn error-reply [message]
+  (str "(:error " (lisp-string (str/replace (str message) "\u0000" "")) ")"))
+
+(defn callback-error-id
+  "The error id a callback's RuntimeException carries in its message, or nil."
+  [message]
+  (some-> (re-find #"\[jolt-openldk callback error (\d+)\]" (or message "")) second parse-long))
+
 ;; --- Lisp text -> Clojure -------------------------------------------------------
 
 (defn lisp->value
