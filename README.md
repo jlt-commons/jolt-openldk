@@ -1,5 +1,7 @@
 # jolt-openldk
 
+[![ci](https://github.com/jlt-commons/jolt-openldk/actions/workflows/ci.yml/badge.svg)](https://github.com/jlt-commons/jolt-openldk/actions/workflows/ci.yml)
+
 > [!WARNING]
 > **Alpha.** This project is days old and still finding its shape. The API, the wire protocol between jolt and the bridge, the build layout and the supported platforms may all change without notice or a deprecation path. Don't build anything you can't easily rework on top of it yet.
 
