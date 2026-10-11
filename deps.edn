@@ -10,4 +10,4 @@
  :jolt/native []
 
  :aliases
- {:test {:extra-paths ["test" "examples/tour/src"]}}}
+ {:test {:extra-paths ["test"]}}}

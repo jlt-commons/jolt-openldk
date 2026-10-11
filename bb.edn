@@ -35,7 +35,7 @@
   tour
   {:doc "Walk through the API against a real OpenLDK"
    :task (do (javac! "examples/tour/target/classes" "examples/tour/java/Counter.java")
-             (shell "jolt" "-A:test" "-m" "tour.openldk-tour"))}
+             (shell {:dir "examples/tour"} "jolt" "-m" "tour.openldk-tour"))}
 
   linux
   {:doc "Build and test on Linux in Docker, for this machine's architecture (JOLT_OPENLDK_LINUX_PLATFORM=linux/amd64 to force one). Builds are cached per platform in a Docker volume."

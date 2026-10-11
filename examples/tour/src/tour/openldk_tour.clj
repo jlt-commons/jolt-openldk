@@ -8,11 +8,11 @@
 (defn- show [label v] (println (format "  %-34s %s" label (pr-str v))))
 
 (defn -main [& _]
-  (let [classes (or (System/getenv "TOUR_CLASSES") "examples/tour/target/classes")
-        t0 (System/nanoTime)]
-    (ldk/init! {:classpath classes})
-    (println (format "OpenLDK up in %d ms (SBCL core, JDK class library from JAVA_HOME)"
-                     (quot (- (System/nanoTime) t0) 1000000)))
+  (let [t0 (System/nanoTime)]
+    (ldk/init!)
+    (println (format "OpenLDK up in %d ms (SBCL core, JDK class library from JAVA_HOME, classpath from %s)"
+                     (quot (- (System/nanoTime) t0) 1000000)
+                     (name (:source (ldk/project-classpath)))))
 
     (println "\nthe JDK, statics")
     (show "Math.sqrt(2.0)" (ldk/call-static "java.lang.Math" "sqrt" "(D)D" 2.0))
