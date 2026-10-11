@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `init!` finds the project's classpath when none is passed
+  (jlt-commons/jolt-openldk#3). It takes the first that applies of an explicit
+  `:classpath`, a `:jolt-openldk/classpath` vector in `deps.edn`, and the jars
+  and class files in `jvm/`, falling back to `.`, and that source is the whole
+  classpath. Relative `deps.edn` entries resolve against the current
+  directory. `project-classpath` reports what `init!` would use and where it
+  came from. The tour now keeps its classpath in its own `deps.edn`.
+
 - OpenLDK pinned at `701609f`, which fixes both string bugs reported from
   here (atgreen/openldk#13 and #12): `lstring` misreading signed bytes, and a
   NullPointerException no Java `catch` could see, which made
