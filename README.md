@@ -113,7 +113,7 @@ The result in `dist/` is a 146 MB core, a 412 KB `libsbcl.dylib` and a 34 KB shi
 
 `init!` starts SBCL and sets the classpath, which OpenLDK only accepts once per process. Calling it again with the same classpath does nothing. Calling it with a different one throws. Before starting anything it checks that JAVA_HOME is a JDK 25 with its class library and that every classpath entry exists, because OpenLDK reacts to the first by exiting the process and to the second by failing on the first class load, after the classpath can no longer change. If `init!` fails after SBCL was started, later calls say so and the process has to be restarted, since SBCL can't be started twice.
 
-With no arguments, `init!` finds the classpath itself, from the first of three sources that applies. That source is the whole classpath, and nothing merges across them.
+`init!` takes its classpath from the first of three sources that applies, so with no arguments it finds the project's classpath itself. That source is the whole classpath, and nothing merges across them.
 
 1. An explicit `:classpath` passed to `init!`, as a vector or a colon-separated string.
 2. A `:jolt-openldk/classpath` vector in the `deps.edn` of the current directory. A key that is present wins even when its vector is empty, and a value that isn't a vector throws.
