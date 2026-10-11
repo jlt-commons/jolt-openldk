@@ -9,6 +9,14 @@ duplicates: bug 1 as
 [#12](https://github.com/atgreen/openldk/issues/12). This page keeps the
 longer notes.
 
+**Both fixed upstream on 2026-10-10, in `701609f`, which jolt-openldk now
+pins.** Bug 1 was fixed by d960ff6, with the same masking proposed below.
+Bug 2 turned out to have its own cause. Every method body converts a Lisp
+TYPE-ERROR into a Java NullPointerException inside a HANDLER-BIND, and SBCL
+runs that handler outside the method's own catch clauses, so the
+manufactured NPE could never be caught. 701609f fixes that. The notes below
+are kept as filed.
+
 Verified against `master` at `23da184e4bb89aeb2d3f230d9d608ac4cff7172b`
 (2026-10-09), SBCL 2.6.9, JDK 25.0.2, macOS arm64.
 

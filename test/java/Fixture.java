@@ -9,6 +9,7 @@ public class Fixture {
     public static boolean even(int n) { return n % 2 == 0; }
     public static char next(char c) { return (char) (c + 1); }
     public static String upper(String s) { return s.toUpperCase(); }
+    public static String shout(String s) { return s.toUpperCase() + "!"; }
     public static String nothing() { return null; }
     public static double nan() { return Double.NaN; }
     public static Object boxed() { return Integer.valueOf(7); }
