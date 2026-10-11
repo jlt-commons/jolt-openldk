@@ -99,7 +99,7 @@ bb build                              # runs bridge/build.sh
 `bridge/build.sh` needs `sbcl` (any recent one, used only to compile SBCL itself), `ocicl`, `git` and `cc` on PATH. It writes nothing outside `~/.cache/jolt-openldk`, or `$JOLT_OPENLDK_HOME` if that is set. It:
 
 - clones SBCL 2.6.9 and builds it with its runtime as `libsbcl`. Homebrew's SBCL isn't built that way, so there is no shortcut.
-- clones OpenLDK at commit `23da184e`, installs its dependencies with ocicl, and dumps `openldk.core` with `bridge/bridge.lisp` loaded.
+- clones OpenLDK at commit `701609f`, installs its dependencies with ocicl, and dumps `openldk.core` with `bridge/bridge.lisp` loaded.
 - compiles the shim, and writes `manifest.edn` naming what went in.
 
 From a clean cache it took about three and a half minutes here, two of them for SBCL, which is built once and reused after that. Set `OPENLDK_SRC=/path/to/checkout` to clone OpenLDK from a local copy instead of GitHub. The checkout itself is never modified.
@@ -194,7 +194,7 @@ On the machine above, 2026-10-09:
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
 - **JavaRef arguments aren't class-checked.** Scalars, strings and vectors are checked against the parameter type, but a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
-- **OpenLDK's own gaps.** It's a young runtime. Two string bugs found while building this are filed upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12), with notes in `docs/openldk-upstream-notes.md`. One is worked around here. The other, `("é✓".toUpperCase() + "!")` throwing a NullPointerException that escapes `catch (Throwable)`, is not.
+- **OpenLDK's own gaps.** It's a young runtime, and anything that fails here may well be OpenLDK rather than the bridge. Two string bugs found while building this were reported upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12) and fixed the next day in `701609f`, which this pins. `docs/openldk-upstream-notes.md` has the details.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
 ## Platforms
@@ -222,7 +222,7 @@ bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing buil
 bb linux    # the same build, tests and tour on Linux in Docker; slow, so not part of gates
 ```
 
-Last run: wire tests 11 tests and 65 assertions, OpenLDK tests 17 tests and 147 assertions, all passing.
+Last run: wire tests 11 tests and 65 assertions, OpenLDK tests 18 tests and 151 assertions, all passing.
 
 ## Licence
 

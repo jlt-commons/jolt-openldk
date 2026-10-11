@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- OpenLDK pinned at `701609f`, which fixes both string bugs reported from
+  here (atgreen/openldk#13 and #12): `lstring` misreading signed bytes, and a
+  NullPointerException no Java `catch` could see, which made
+  `"é✓".toUpperCase() + "!"` fail. A test now covers that concatenation.
+
 - Moved to `jlt-commons/jolt-openldk` and made public.
 - CI on GitHub Actions: lint, Linux x86-64, Linux arm64 (through
   `linux/Dockerfile`) and macOS arm64, each running the build, every test with

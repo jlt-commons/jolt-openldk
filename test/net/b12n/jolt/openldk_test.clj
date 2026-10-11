@@ -54,6 +54,15 @@
      (is (= out (ldk/call-static "Fixture" "upper" "(Ljava/lang/String;)Ljava/lang/String;" in))
          (pr-str in)))))
 
+(deftest java-concatenation-of-non-latin1-strings
+  ;; Threw a NullPointerException that escaped catch (Throwable) until
+  ;; OpenLDK 701609f (atgreen/openldk#12, #13).
+  (when-built
+    (ldk/init! {:classpath classes})
+    (doseq [[in out] [["é✓" "É✓!"] ["héllo \"q\" ✓" "HÉLLO \"Q\" ✓!"] ["a✓" "A✓!"] ["😀" "😀!"]]]
+      (is (= out (ldk/call-static "Fixture" "shout" "(Ljava/lang/String;)Ljava/lang/String;" in))
+          (pr-str in)))))
+
 (deftest clojure-values-box-for-object-parameters
   (when-built
    (ldk/init! {:classpath classes})
