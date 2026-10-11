@@ -29,6 +29,7 @@
   {:doc "Run the tests"
    :task (do (javac! "target/test-classes" "test/java/Fixture.java")
              (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
+             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
              (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test"))}
 
   tour
@@ -66,6 +67,7 @@
              (println "\n== test ==")
              (javac! "target/test-classes" "test/java/Fixture.java")
              (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
+             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
              (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
                     "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
              (println "\n== tour ==") (run 'tour))}}}
