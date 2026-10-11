@@ -21,9 +21,15 @@
                              {:file (.getPath f)} e)))))))
 
 (defn warm-classes
-  "The class names listed under :jolt-openldk/warm in deps.edn, or []."
+  "The class names listed under :jolt-openldk/warm in deps.edn, or []. The
+  value must be absent, nil or a vector of strings, else this throws ex-info."
   [root]
-  (vec (:jolt-openldk/warm (read-deps root))))
+  (let [v (:jolt-openldk/warm (read-deps root))]
+    (when-not (or (nil? v) (and (vector? v) (every? string? v)))
+      (throw (ex-info (str ":jolt-openldk/warm in " root "/deps.edn must be a vector of class name strings, got "
+                           (pr-str v))
+                      {:key :jolt-openldk/warm :value v})))
+    (or v [])))
 
 (defn- absolute [root entry]
   (if (.isAbsolute (io/file entry))
