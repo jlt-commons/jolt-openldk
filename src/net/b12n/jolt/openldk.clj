@@ -236,12 +236,12 @@
   one throws, and so does any init! after a start that failed part-way.
 
   opts: :classpath (a string, or a seq of directories and jars, all of which
-  must exist), :home (the JOLT_OPENLDK_HOME to use). Without :classpath it
-  comes from :jolt-openldk/classpath in deps.edn, else the jars in jvm/, else
-  \".\". The first of those that exists is the whole classpath, nothing
-  merges, and relative deps.edn entries resolve against the current
-  directory. OpenLDK reads the JDK's class library at run time, so JAVA_HOME
-  must name a JDK 25."
+  must exist), :home (the JOLT_OPENLDK_HOME to use). Without :classpath, the
+  first source that applies is the whole classpath: a :jolt-openldk/classpath
+  key in deps.edn that is present (even if empty), else jvm/ when it holds
+  jars or class files, else \".\". Nothing merges, and relative deps.edn
+  entries resolve against the current directory. OpenLDK reads the JDK's
+  class library at run time, so JAVA_HOME must name a JDK 25."
   ([] (init! {}))
   ([opts]
    (let [want {:classpath (:classpath (project-classpath opts)) :dist (dist-dir opts)}]
