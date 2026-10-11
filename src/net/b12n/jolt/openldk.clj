@@ -27,6 +27,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.ffi :as ffi]
+            [net.b12n.jolt.openldk.project :as project]
             [net.b12n.jolt.openldk.wire :as wire]))
 
 (ffi/defcfn ^:private ldk-init "ldk_init" [:pointer] :int :blocking)
@@ -163,10 +164,12 @@
           (try (wire/reply->value text)
                (catch Exception e (throw (rethrow-original e)))))))))
 
-(defn- classpath-string [cp]
-  (cond (nil? cp) "."
-        (string? cp) cp
-        :else (str/join ":" cp)))
+(defn project-classpath
+  "What `init!` would use for `opts` from the current directory: a map of
+  :classpath (a colon string), :entries and :source (:explicit, :deps-edn,
+  :jvm-dir or :default). See net.b12n.jolt.openldk.project/resolve-classpath."
+  ([] (project-classpath {}))
+  ([opts] (project/resolve-classpath (System/getProperty "user.dir") (:classpath opts))))
 
 (defn missing-classpath-entries
   "The entries of classpath string `cp` that do not exist. OpenLDK accepts a
@@ -231,11 +234,12 @@
   one throws, and so does any init! after a start that failed part-way.
 
   opts: :classpath (a string, or a seq of directories and jars, all of which
-  must exist), :home (the JOLT_OPENLDK_HOME to use). OpenLDK reads the JDK's
+  must exist; when absent, :jolt-openldk/classpath in deps.edn, else the
+  jars in jvm/, else \".\", all read from the current directory), :home (the JOLT_OPENLDK_HOME to use). OpenLDK reads the JDK's
   class library at run time, so JAVA_HOME must name a JDK 25."
   ([] (init! {}))
   ([opts]
-   (let [want {:classpath (classpath-string (:classpath opts)) :dist (dist-dir opts)}]
+   (let [want {:classpath (:classpath (project-classpath opts)) :dist (dist-dir opts)}]
      (locking init-lock
        (let [{:keys [phase error] :as current} @state]
          (case phase

@@ -4,6 +4,7 @@
   "Classpath resolution from deps.edn and jvm/. These tests need no build."
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is run-tests]]
+            [net.b12n.jolt.openldk :as ldk]
             [net.b12n.jolt.openldk.project :as project]))
 
 (defn- temp-dir []
@@ -96,6 +97,10 @@
     (is (thrown-with-msg? Exception #":jolt-openldk/warm.*deps.edn" (project/warm-classes dir)))
     (put! dir2 "deps.edn" "{:jolt-openldk/warm [\"java.time.LocalDate\" 3]}")
     (is (thrown-with-msg? Exception #":jolt-openldk/warm.*deps.edn" (project/warm-classes dir2)))))
+
+(deftest project-classpath-uses-user-dir
+  (is (= (project/resolve-classpath (System/getProperty "user.dir") nil)
+         (ldk/project-classpath))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.project-test)]
