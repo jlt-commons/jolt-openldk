@@ -4,7 +4,9 @@
   "Java from jolt, with no JVM: OpenLDK translates bytecode to Common Lisp and
   SBCL compiles it, inside this process.
 
-    (openldk/init! {:classpath [\"classes\" \"lib/some.jar\"]})
+    (openldk/init!)   ; classpath from :jolt-openldk/classpath in deps.edn,
+                      ; else the jars in jvm/
+    (openldk/init! {:classpath [\"classes\" \"lib/some.jar\"]})   ; or say so
     (openldk/call-static \"java.lang.Math\" \"sqrt\" \"(D)D\" 2.0)   ;=> 1.4142135623730951
     (openldk/with-ref [xs (openldk/new-object \"java.util.ArrayList\" \"()V\")]
       (openldk/call xs \"add\" \"(Ljava/lang/Object;)Z\" \"a\")
@@ -234,9 +236,12 @@
   one throws, and so does any init! after a start that failed part-way.
 
   opts: :classpath (a string, or a seq of directories and jars, all of which
-  must exist; when absent, :jolt-openldk/classpath in deps.edn, else the
-  jars in jvm/, else \".\", all read from the current directory), :home (the JOLT_OPENLDK_HOME to use). OpenLDK reads the JDK's
-  class library at run time, so JAVA_HOME must name a JDK 25."
+  must exist), :home (the JOLT_OPENLDK_HOME to use). Without :classpath it
+  comes from :jolt-openldk/classpath in deps.edn, else the jars in jvm/, else
+  \".\". The first of those that exists is the whole classpath, nothing
+  merges, and relative deps.edn entries resolve against the current
+  directory. OpenLDK reads the JDK's class library at run time, so JAVA_HOME
+  must name a JDK 25."
   ([] (init! {}))
   ([opts]
    (let [want {:classpath (:classpath (project-classpath opts)) :dist (dist-dir opts)}]
