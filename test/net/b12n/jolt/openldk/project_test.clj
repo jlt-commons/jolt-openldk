@@ -90,6 +90,13 @@
     (put! dir2 "deps.edn" "{:jolt-openldk/warm [\"java.time.LocalDate\"]}")
     (is (= ["java.time.LocalDate"] (project/warm-classes dir2)))))
 
+(deftest non-vector-warm-throws
+  (let [dir (temp-dir) dir2 (temp-dir)]
+    (put! dir "deps.edn" "{:jolt-openldk/warm \"java.time.LocalDate\"}")
+    (is (thrown-with-msg? Exception #":jolt-openldk/warm.*deps.edn" (project/warm-classes dir)))
+    (put! dir2 "deps.edn" "{:jolt-openldk/warm [\"java.time.LocalDate\" 3]}")
+    (is (thrown-with-msg? Exception #":jolt-openldk/warm.*deps.edn" (project/warm-classes dir2)))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.project-test)]
     (shutdown-agents)
