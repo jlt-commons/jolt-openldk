@@ -12,7 +12,8 @@ Java libraries from [jolt](https://github.com/jolt-lang/jolt), with no JVM in th
 ```clojure
 (require '[net.b12n.jolt.openldk :as ldk])
 
-(ldk/init! {:classpath ["classes" "lib/some.jar"]})
+(ldk/init!)                        ; classpath from deps.edn or jvm/, see "Using it"
+;; or say it outright: (ldk/init! {:classpath ["classes" "lib/some.jar"]})
 
 (ldk/call-static "java.lang.Math" "sqrt" "(D)D" 2.0)          ;=> 1.4142135623730951
 
@@ -112,6 +113,21 @@ The result in `dist/` is a 146 MB core, a 412 KB `libsbcl.dylib` and a 34 KB shi
 
 `init!` starts SBCL and sets the classpath, which OpenLDK only accepts once per process. Calling it again with the same classpath does nothing. Calling it with a different one throws. Before starting anything it checks that JAVA_HOME is a JDK 25 with its class library and that every classpath entry exists, because OpenLDK reacts to the first by exiting the process and to the second by failing on the first class load, after the classpath can no longer change. If `init!` fails after SBCL was started, later calls say so and the process has to be restarted, since SBCL can't be started twice.
 
+With no arguments, `init!` finds the classpath itself, from the first of three sources that applies. That source is the whole classpath, and nothing merges across them.
+
+1. An explicit `:classpath` passed to `init!`, as a vector or a colon-separated string.
+2. A `:jolt-openldk/classpath` vector in the `deps.edn` of the current directory. A key that is present wins even when its vector is empty, and a value that isn't a vector throws.
+3. The `jvm/` folder, when it holds `*.jar` files at its top level, `.class` files anywhere under it, or both. The jars go in by name, and `jvm/` itself comes last if it has class files.
+
+With none of these, the classpath is `.`.
+
+```clojure
+{:paths ["src"]
+ :jolt-openldk/classpath ["target/classes" "lib/some.jar"]}
+```
+
+Relative entries resolve against the directory jolt was started from, not against wherever the `deps.edn` file lives, so start the process in the project root. `(ldk/project-classpath)` returns what `init!` would use, with the `:source` it came from, which helps when the classpath isn't the one you expected.
+
 Methods are named the way JNI names them, a name plus a descriptor, because Java overloads. The descriptor's return type also tells the bridge how to hand back the result:
 
 | Java | crosses as | comes back as |
@@ -174,7 +190,7 @@ A Java exception arrives as an `ex-info`:
 
 Mistakes on the Clojure side, such as a missing class, a wrong argument count, or 99999999999 passed to an `int`, carry `:openldk/error` instead.
 
-`bb tour` runs `examples/tour`, which works through `Math`, `StringBuilder`, `TreeMap`, `java.time` and a class of its own. Its date arithmetic and hex output were cross-checked against `date` and `printf`, since OpenLDK's correctness is the thing on trial.
+`bb tour` runs `examples/tour`, which takes its classpath from its own `deps.edn` and works through `Math`, `StringBuilder`, `TreeMap`, `java.time` and a class of its own. Its date arithmetic and hex output were cross-checked against `date` and `printf`, since OpenLDK's correctness is the thing on trial.
 
 ## What was measured
 
@@ -217,12 +233,12 @@ On a network that inspects TLS, Zscaler for instance, ocicl can't fetch from ghc
 ## Tests
 
 ```sh
-bb test     # wire tests always; the OpenLDK tests skip without a build
+bb test     # wire and project tests always (the project tests need no build); the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 bb linux    # the same build, tests and tour on Linux in Docker; slow, so not part of gates
 ```
 
-Last run: wire tests 11 tests and 65 assertions, OpenLDK tests 18 tests and 151 assertions, all passing.
+Last run: wire tests 11 tests and 65 assertions, project tests 14 tests and 19 assertions, OpenLDK tests 18 tests and 151 assertions, all passing.
 
 ## Licence
 
