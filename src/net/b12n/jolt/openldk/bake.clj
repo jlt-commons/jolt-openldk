@@ -24,6 +24,13 @@
   [text]
   (vec (take-last 5 (filter #(str/starts-with? % "bake:") (str/split-lines text)))))
 
+(defn report-lines
+  "Every `bake: skipped` and `bake: failed` line of the bake log `text`, in
+  order and not capped, so what a bake left out is visible."
+  [text]
+  (vec (filter #(or (str/starts-with? % "bake: skipped ") (str/starts-with? % "bake: failed "))
+               (str/split-lines text))))
+
 (defn- delete-quietly [path] (.delete (io/file path)))
 
 (defn ensure-unchanged!
@@ -95,6 +102,7 @@
           core (str out "/openldk.core")
           log (str out "/bake.log")]
       (println "baked" core)
+      (run! println (report-lines (slurp log)))
       (println "counts" (pr-str counts))
       (println "skipped" (or (:classes-skipped counts) 0) "failed" (or (:methods-failed counts) 0))
       (println "core size" (format "%.1f MB" (/ (.length (io/file core)) 1048576.0)))
