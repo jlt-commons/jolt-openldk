@@ -13,7 +13,8 @@
   `init!` with an error naming it, before SBCL starts. Only the coordinates
   you list are fetched, not their dependencies, so list those too. `bake`
   covers the coordinate jars, and a version bump makes the baked core stale.
-  `:exclusions`, `:mvn/repos` and classifiers are rejected.
+  An extra key in a coordinate's map, such as
+  `:exclusions`, is rejected, and `:mvn/repos` and classifiers aren't supported.
 
 - CI uses the Node 24 releases of `actions/checkout` (v7), `actions/setup-java`
   (v6) and `actions/cache` (v6). GitHub had started warning that the v4

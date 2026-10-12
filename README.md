@@ -116,7 +116,7 @@ The result in `dist/` is a 146 MB core, a 412 KB `libsbcl.dylib` and a 34 KB shi
 `init!` takes its classpath from the first of three sources that applies, so with no arguments it finds the project's classpath itself. That source is the whole classpath, and nothing merges across them.
 
 1. An explicit `:classpath` passed to `init!`, as a vector or a colon-separated string. It ignores `deps.edn` altogether.
-2. The `deps.edn` of the current directory, when it has a `:jolt-openldk/deps` map, a `:jolt-openldk/classpath` vector, or both. Either key makes `deps.edn` the source. A key that is present wins even when it is empty (`{}` or `[]`), a key set to `nil` counts as absent, and a value of the wrong type throws. Coordinate jars come first, then the `:jolt-openldk/classpath` entries.
+2. The `deps.edn` of the current directory, when it has a `:jolt-openldk/deps` map, a `:jolt-openldk/classpath` vector, or both. Either key makes `deps.edn` the source. A key that is present wins even when it is empty (`{}` or `[]`), a `nil` `:jolt-openldk/deps` counts as absent, while a `nil` `:jolt-openldk/classpath` throws like any other value of the wrong type. Coordinate jars come first, then the `:jolt-openldk/classpath` entries.
 3. The `jvm/` folder, when it holds `*.jar` files at its top level, `.class` files anywhere under it, or both. The jars go in by name, and `jvm/` itself comes last if it has class files.
 
 With none of these, the classpath is `.`.
@@ -127,7 +127,7 @@ With none of these, the classpath is `.`.
  :jolt-openldk/classpath ["target/classes" "lib/some.jar"]}
 ```
 
-`:jolt-openldk/deps` names Java libraries by Maven coordinate: a qualified symbol mapped to exactly `{:mvn/version "<version>"}`. Anything else in the map, such as `:exclusions` or `:git/url`, is rejected. Jolt's own resolver (`jolt.deps/resolve-deps`, so jolt 0.8.19 or later) fetches the jars from Clojars, then Maven Central, into `~/.m2/repository`, or into `$JOLT_MAVEN_REPOSITORY` when that is set. A jar already in that directory needs no network. A coordinate that can't be resolved stops `init!` with an error that names it, before SBCL starts:
+`:jolt-openldk/deps` names Java libraries by Maven coordinate: a qualified symbol mapped to exactly `{:mvn/version "<version>"}`. Any other key in a coordinate's map, such as `:exclusions` or `:git/url`, is rejected. Jolt's own resolver (`jolt.deps/resolve-deps`, so jolt 0.8.19 or later) fetches the jars from Clojars, then Maven Central, into `~/.m2/repository`, or into `$JOLT_MAVEN_REPOSITORY` when that is set. A jar already in that directory needs no network. A coordinate that can't be resolved stops `init!` with an error that names it, before SBCL starts:
 
 ```
 jolt-openldk: cannot resolve :jolt-openldk/deps: Error building classpath. The following artifacts could not be resolved:
