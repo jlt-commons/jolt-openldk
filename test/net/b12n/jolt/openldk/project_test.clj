@@ -3,6 +3,7 @@
 (ns net.b12n.jolt.openldk.project-test
   "Classpath resolution from deps.edn and jvm/. These tests need no build."
   (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is run-tests]]
             [net.b12n.jolt.openldk :as ldk]
             [net.b12n.jolt.openldk.project :as project]))
@@ -97,6 +98,59 @@
     (is (thrown-with-msg? Exception #":jolt-openldk/warm.*deps.edn" (project/warm-classes dir)))
     (put! dir2 "deps.edn" "{:jolt-openldk/warm [\"java.time.LocalDate\" 3]}")
     (is (thrown-with-msg? Exception #":jolt-openldk/warm.*deps.edn" (project/warm-classes dir2)))))
+
+(def ^:private seeded
+  (str (System/getenv "JOLT_MAVEN_REPOSITORY") "/net/b12n/test/fixture/1.0/fixture-1.0.jar"))
+
+(deftest deps-key-alone-is-the-deps-edn-source
+  (let [dir (temp-dir)]
+    (put! dir "deps.edn" "{:jolt-openldk/deps {net.b12n.test/fixture {:mvn/version \"1.0\"}}}")
+    (is (= {:classpath seeded :entries [seeded] :source :deps-edn
+            :libs '{net.b12n.test/fixture {:mvn/version "1.0"}}}
+           (project/resolve-classpath dir nil)))))
+
+(deftest coordinate-jars-come-before-classpath-entries
+  (let [dir (temp-dir)]
+    (put! dir "deps.edn" (str "{:jolt-openldk/deps {net.b12n.test/fixture {:mvn/version \"1.0\"}}"
+                              " :jolt-openldk/classpath [\"lib/k.jar\"]}"))
+    (let [r (project/resolve-classpath dir nil)]
+      (is (= [seeded (str dir "/lib/k.jar")] (:entries r)))
+      (is (= (str seeded ":" dir "/lib/k.jar") (:classpath r))))))
+
+(deftest deps-key-overrides-jvm-dir
+  (let [dir (temp-dir)]
+    (put! dir "deps.edn" "{:jolt-openldk/deps {net.b12n.test/fixture {:mvn/version \"1.0\"}}}")
+    (put! dir "jvm/a.jar" "")
+    (is (= [seeded] (:entries (project/resolve-classpath dir nil))))))
+
+(deftest empty-deps-map-is-present
+  (let [dir (temp-dir)]
+    (put! dir "deps.edn" "{:jolt-openldk/deps {}}")
+    (put! dir "jvm/a.jar" "")
+    (is (= {:classpath "" :entries [] :source :deps-edn :libs {}}
+           (project/resolve-classpath dir nil)))))
+
+(deftest nil-deps-key-is-absent
+  (let [dir (temp-dir)]
+    (put! dir "deps.edn" "{:jolt-openldk/deps nil}")
+    (put! dir "jvm/a.jar" "")
+    (let [r (project/resolve-classpath dir nil)]
+      (is (= :jvm-dir (:source r)))
+      (is (not (contains? r :libs))))))
+
+(deftest bad-deps-key-names-the-file
+  (let [dir (temp-dir)]
+    (put! dir "deps.edn" "{:jolt-openldk/deps {fixture {:mvn/version \"1.0\"}}}")
+    (let [e (try (project/resolve-classpath dir nil) nil (catch Exception e e))]
+      (is (some? e))
+      (is (str/includes? (ex-message e) (str dir "/deps.edn")))
+      (is (= :jolt-openldk/deps (:key (ex-data e)))))))
+
+(deftest explicit-ignores-deps-key
+  (let [dir (temp-dir)]
+    (put! dir "deps.edn" "{:jolt-openldk/deps {no.such/thing {:mvn/version \"1.0\"}}}")
+    (is (= {:classpath "x" :entries ["x"] :source :explicit}
+           (project/resolve-classpath dir ["x"])))))
 
 (deftest project-classpath-uses-user-dir
   (is (= (project/resolve-classpath (System/getProperty "user.dir") nil)
