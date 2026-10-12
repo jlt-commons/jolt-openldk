@@ -1,2 +1,3 @@
 {:deps {net.b12n/jolt-openldk {:local/root "../../.."}}
- :jolt-openldk/classpath ["../../../target/test-classes"]}
+ :jolt-openldk/classpath ["../../../target/test-classes"]
+ :jolt-openldk/warm ["java.time.LocalDate"]}
