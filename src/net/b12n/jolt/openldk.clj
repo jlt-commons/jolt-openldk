@@ -255,8 +255,8 @@
                              rebake)
                         {:core core})))
       (let [baked (edn/read-string (slurp mf))
-            {:keys [entries]} (project/resolve-classpath root nil)
-            problems (manifest/problems baked {:entries entries
+            {:keys [entries classpath]} (project/resolve-classpath root nil)
+            problems (manifest/problems baked {:entries entries :classpath classpath
                                                :warm (project/warm-classes root)
                                                :dist-manifest (edn/read-string (slurp (io/file dist "manifest.edn")))})]
         (when (seq problems)
