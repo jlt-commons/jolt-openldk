@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Maven coordinates (jlt-commons/jolt-openldk#3). A project can name Java
+  libraries under `:jolt-openldk/deps` in `deps.edn`, as a qualified symbol
+  mapped to `{:mvn/version "..."}`, and `init!` resolves them to jars through
+  jolt's resolver (jolt 0.8.19 or later, Clojars then Maven Central, cached in
+  `~/.m2/repository` or `$JOLT_MAVEN_REPOSITORY`). Either that key or
+  `:jolt-openldk/classpath` makes `deps.edn` the classpath source. Coordinate
+  jars come first, then the `:jolt-openldk/classpath` entries, and
+  `project-classpath` gains `:libs`. A coordinate that can't be resolved stops
+  `init!` with an error naming it, before SBCL starts. Only the coordinates
+  you list are fetched, not their dependencies, so list those too. `bake`
+  covers the coordinate jars, and a version bump makes the baked core stale.
+  `:exclusions`, `:mvn/repos` and classifiers are rejected.
+
 - CI uses the Node 24 releases of `actions/checkout` (v7), `actions/setup-java`
   (v6) and `actions/cache` (v6). GitHub had started warning that the v4
   releases target the deprecated Node 20.
