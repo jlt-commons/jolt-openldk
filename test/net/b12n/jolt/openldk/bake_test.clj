@@ -127,6 +127,54 @@
                    :jolt-openldk/warm warm}))
     tmp))
 
+(defn- write-deps-with-coord! [tmp coord version]
+  (spit (io/file tmp "deps.edn")
+        (pr-str {:deps {'net.b12n/jolt-openldk {:local/root (.getAbsolutePath (io/file "."))}}
+                 :jolt-openldk/deps {coord {:mvn/version version}}
+                 :jolt-openldk/warm ["java.time.LocalDate"]})))
+
+(defn- copy-fixture-with-deps [coord-version]
+  (let [tmp (doto (java.io.File/createTempFile "coord" "") .delete .mkdirs)]
+    (.mkdirs (io/file tmp "src"))
+    (io/copy (io/file fixture "src/bakecheck.clj") (io/file tmp "src/bakecheck.clj"))
+    (write-deps-with-coord! tmp 'net.b12n.test/fixture coord-version)
+    tmp))
+
+(deftest a-coordinate-jar-is-on-the-classpath
+  (when-built
+   (let [tmp (copy-fixture-with-deps "1.0")]
+     (try
+       (let [r (jolt (str tmp) "-m" "bakecheck")]
+         (is (zero? (:exit r)) (:err r))
+         (is (str/includes? (:out r) "add 42") (:out r)))
+       (finally (delete-tree tmp))))))
+
+(deftest a-bake-of-coordinates-is-used-then-goes-stale-on-a-version-bump
+  (when-built
+   (let [tmp (copy-fixture-with-deps "1.0")]
+     (try
+       (let [b (bake! (str tmp))]
+         (is (zero? (:exit b)) (:err b)))
+       (let [r (jolt (str tmp) "-m" "bakecheck")]
+         (is (zero? (:exit r)) (:err r))
+         (is (str/includes? (:out r) (str "core " (.getCanonicalPath tmp) "/target/openldk/openldk.core")) (:out r)))
+       (write-deps-with-coord! tmp 'net.b12n.test/fixture "2.0")
+       (let [r (jolt (str tmp) "-m" "bakecheck")]
+         (is (pos? (:exit r)))
+         (is (str/includes? (:err r) "stale") (:err r)))
+       (finally (delete-tree tmp))))))
+
+(deftest a-missing-coordinate-stops-init-before-sbcl
+  ;; No when-built: it fails during resolution, before any build is needed.
+  (let [tmp (copy-fixture-with-deps "1.0")]
+    (try
+      (write-deps-with-coord! tmp 'no.such/thing "1.0")
+      (let [r (jolt (str tmp) "-m" "bakecheck")]
+        (is (pos? (:exit r)))
+        (is (str/includes? (:err r) "cannot resolve :jolt-openldk/deps") (:err r))
+        (is (str/includes? (:err r) "no.such/thing") (:err r)))
+      (finally (delete-tree tmp)))))
+
 (deftest a-failed-bake-leaves-nothing-behind
   (when-built
    (let [tmp (copy-fixture-with-warm ["java.time.LocalDate"])]
