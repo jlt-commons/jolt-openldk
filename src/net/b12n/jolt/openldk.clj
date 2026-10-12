@@ -274,7 +274,8 @@
   same classpath and build; OpenLDK sets its classpath once, so a different
   one throws, and so does any init! after a start that failed part-way.
 
-  Without :classpath, a core baked by `jolt -M -m net.b12n.jolt.openldk.bake`
+  Without :classpath, a repeat call once set up only checks the build, never
+  the project again. Also without :classpath, a core baked by `jolt -M -m net.b12n.jolt.openldk.bake`
   into target/openldk of the current directory is used instead of the shared
   one, and init! refuses it, naming what changed, when the project's classpath
   or the build no longer match it. An explicit :classpath always uses the
@@ -290,19 +291,28 @@
   ([] (init! {}))
   ([opts]
    (let [root (System/getProperty "user.dir")
-         dist (dist-dir opts)
-         want {:classpath (:classpath (project/resolve-classpath root (:classpath opts)))
-               :dist dist
-               :core (or (baked-core root opts) (str dist "/openldk.core"))}]
+         dist (dist-dir opts)]
      (locking init-lock
-       (let [{:keys [phase error] :as current} @state]
+       (let [{:keys [phase error] :as current} @state
+             mismatch (fn [want]
+                        (throw (ex-info (str "jolt-openldk: already set up with classpath " (:classpath current)
+                                             " from " (:dist current) " on core " (:core current)
+                                             "; OpenLDK is set up once per process")
+                                        {:current (select-keys current [:classpath :dist :core]) :asked want})))
+             want (fn []
+                    {:classpath (:classpath (project/resolve-classpath root (:classpath opts)))
+                     :dist dist
+                     :core (or (baked-core root opts) (str dist "/openldk.core"))})]
          (case phase
-           nil (do (check-baked! root want) (start! want))
-           :ready (when (not= want (select-keys current [:classpath :dist :core]))
-                    (throw (ex-info (str "jolt-openldk: already set up with classpath " (:classpath current)
-                                         " from " (:dist current) " on core " (:core current)
-                                         "; OpenLDK is set up once per process")
-                                    {:current (select-keys current [:classpath :dist :core]) :asked want})))
+           nil (let [want (want)] (check-baked! root want) (start! want))
+           ;; Without :classpath the project is not consulted again once set up:
+           ;; a bake finishing or deps.edn changing since must not fail a repeat call.
+           :ready (if (nil? (:classpath opts))
+                    (when (not= dist (:dist current))
+                      (mismatch {:dist dist}))
+                    (let [want (want)]
+                      (when (not= want (select-keys current [:classpath :dist :core]))
+                        (mismatch want))))
            :failed (throw (ex-info (str "jolt-openldk: an earlier init! failed after SBCL was started ("
                                         error "); restart the process")
                                    {:error error})))

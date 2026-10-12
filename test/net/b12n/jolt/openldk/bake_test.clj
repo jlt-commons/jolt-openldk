@@ -57,6 +57,23 @@
          (is (not (re-find (re-pattern "; COMPILING java/time/LocalDate\\.of") (str (:out r) (:err r))))
              "a warmed JDK class compiles nothing at run time"))))))
 
+(deftest a-repeat-init-ignores-what-changed-on-disk
+  ;; reinit deletes the core and rewrites deps.edn, so it runs on a copy.
+  (when-built
+   (let [tmp (doto (java.io.File/createTempFile "reinit" "") .delete .mkdirs)]
+     (try
+       (.mkdirs (io/file tmp "src"))
+       (io/copy (io/file fixture "src/reinit.clj") (io/file tmp "src/reinit.clj"))
+       (spit (io/file tmp "deps.edn")
+             (pr-str {:deps {'net.b12n/jolt-openldk {:local/root (.getAbsolutePath (io/file "."))}}
+                      :jolt-openldk/classpath [(.getAbsolutePath (io/file "target/test-classes"))]}))
+       (is (zero? (:exit (bake! (str tmp)))))
+       (let [r (jolt (str tmp) "-m" "reinit")]
+         (is (zero? (:exit r)) (:err r))
+         (is (str/includes? (:out r) "again true") (:out r))
+         (is (str/includes? (:out r) "add 42") (:out r)))
+       (finally (delete-tree tmp))))))
+
 (deftest init-refuses-stale-core
   (when-built
    (with-clean-fixture
