@@ -32,7 +32,8 @@
              (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
              (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.manifest-test")
              (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test"))}
+             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
+             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test"))}
 
   tour
   {:doc "Walk through the API against a real OpenLDK"
@@ -75,4 +76,6 @@
                     "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
              (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
                     "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
+             (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
+                    "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test")
              (println "\n== tour ==") (run 'tour))}}}

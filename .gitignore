@@ -13,3 +13,6 @@ examples/tour/target/
 # TLS-inspecting proxy such as Zscaler). A machine's own certificate, never
 # committed.
 linux/extra-ca/*.crt
+
+# fixture projects bake into their own target/
+test/fixtures/*/target/

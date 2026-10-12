@@ -1,0 +1,2 @@
+{:deps {net.b12n/jolt-openldk {:local/root "../../.."}}
+ :jolt-openldk/classpath ["../../../target/test-classes"]}
