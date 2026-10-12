@@ -19,6 +19,11 @@
 
 (defn- fail [msg data] (throw (ex-info (str "jolt-openldk bake: " msg) data)))
 
+(defn- bake-lines
+  "The bridge's own `bake:` lines in the bake output, the last five at most."
+  [text]
+  (vec (take-last 5 (filter #(str/starts-with? % "bake:") (str/split-lines text)))))
+
 (defn- delete-quietly [path] (.delete (io/file path)))
 
 (defn ensure-unchanged!
@@ -62,7 +67,11 @@
                                               (map #(str/replace % "." "/") warm))]
             (spit log (str out err))
             (when-not (zero? exit)
-              (fail (str "bake.sh exited " exit "; see " log) {:exit exit :log log}))
+              (let [lines (bake-lines (str out err))]
+                (fail (str "bake.sh exited " exit
+                           (apply str (map #(str "\n" %) lines))
+                           "\nsee " log)
+                      {:exit exit :log log :bake-lines lines})))
             (ensure-unchanged! before (manifest/fingerprint entries))
             (let [counts (edn/read-string (slurp counts-tmp))]
               (when-not (.renameTo (io/file core-tmp) (io/file core))

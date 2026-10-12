@@ -123,7 +123,7 @@
        (let [r (bake! (str tmp))
              left (set (.list (io/file tmp "target/openldk")))]
          (is (pos? (:exit r)))
-         ;; stderr names only the log; the reason, with the class name, is in it
+         (is (str/includes? (:err r) "java/time/NoSuch") (:err r))
          (is (re-find (re-pattern "bake: unknown warm class java/time/NoSuch")
                       (slurp (io/file tmp "target/openldk/bake.log"))))
          (is (not (contains? left "openldk.core")) (pr-str left))
