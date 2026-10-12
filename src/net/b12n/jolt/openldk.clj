@@ -26,9 +26,11 @@
   One OpenLDK per process, set up once with one classpath, and no shutdown.
   Calls are serialised: OpenLDK's own thread-safety is not established, so
   two jolt threads take turns rather than meeting inside it."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.ffi :as ffi]
+            [net.b12n.jolt.openldk.manifest :as manifest]
             [net.b12n.jolt.openldk.project :as project]
             [net.b12n.jolt.openldk.wire :as wire]))
 
@@ -208,7 +210,7 @@
   "Everything init! does the first time. Any failure once SBCL has been asked
   to start is recorded, because nothing after that point can be retried in
   this process."
-  [{:keys [classpath dist]}]
+  [{:keys [classpath dist core]}]
   (when-not (built? dist)
     (throw (ex-info (str "jolt-openldk: no build in " dist "; run bridge/build.sh, or set JOLT_OPENLDK_HOME")
                     {:dist dist})))
@@ -219,21 +221,64 @@
                     {:classpath classpath :missing (vec missing)})))
   (ffi/load-library (str dist "/" lib-name))
   (try
-    (let [rc (ffi/with-arena [a] (ldk-init (ffi/string->ptr a (str dist "/openldk.core"))))]
+    (let [rc (ffi/with-arena [a] (ldk-init (ffi/string->ptr a core)))]
       (when-not (#{0 1} rc)
         (throw (ex-info (str "jolt-openldk: ldk_init failed: " (init-codes rc (str "status " rc)))
                         {:rc rc :dist dist}))))
     (install-trampoline!)
     (send! (wire/setup classpath))
-    (reset! state {:phase :ready :classpath classpath :dist dist})
+    (reset! state {:phase :ready :classpath classpath :dist dist :core core})
     (catch Exception e
-      (reset! state {:phase :failed :classpath classpath :dist dist :error (ex-message e)})
+      (reset! state {:phase :failed :classpath classpath :dist dist :core core :error (ex-message e)})
       (throw e))))
+
+;; --- the baked core ----------------------------------------------------------------
+
+(def ^:private rebake "re-run: jolt -M -m net.b12n.jolt.openldk.bake")
+
+(defn- baked-core
+  "The path of this project's baked core when `opts` leaves the classpath to
+  the project and the core exists, else nil."
+  [root opts]
+  (when (nil? (:classpath opts))
+    (let [f (io/file root "target" "openldk" "openldk.core")]
+      (when (.exists f) (.getPath f)))))
+
+(defn- check-baked!
+  "Refuse a baked core that is unfinished or no longer matches the project,
+  before anything is loaded. A build that is missing is start!'s to report."
+  [root {:keys [core dist]}]
+  (when (and (not= core (str dist "/openldk.core")) (built? dist))
+    (let [mf (io/file (.getParentFile (io/file core)) "bake-manifest.edn")]
+      (when-not (.exists mf)
+        (throw (ex-info (str "jolt-openldk: " core " has no bake-manifest.edn, so the bake did not finish; "
+                             rebake)
+                        {:core core})))
+      (let [baked (edn/read-string (slurp mf))
+            {:keys [entries]} (project/resolve-classpath root nil)
+            problems (manifest/problems baked {:entries entries
+                                               :warm (project/warm-classes root)
+                                               :dist-manifest (edn/read-string (slurp (io/file dist "manifest.edn")))})]
+        (when (seq problems)
+          (throw (ex-info (str "jolt-openldk: the baked core is stale (" (str/join "; " problems) "); " rebake)
+                          {:core core :problems problems})))))))
+
+(defn status
+  "Where init! stands: :phase (nil, :ready or :failed), :classpath, :dist and
+  :core, the core file in use."
+  []
+  (select-keys @state [:phase :classpath :dist :core]))
 
 (defn init!
   "Start SBCL on the OpenLDK core and set the classpath. Idempotent for the
   same classpath and build; OpenLDK sets its classpath once, so a different
   one throws, and so does any init! after a start that failed part-way.
+
+  Without :classpath, a core baked by `jolt -M -m net.b12n.jolt.openldk.bake`
+  into target/openldk of the current directory is used instead of the shared
+  one, and init! refuses it, naming what changed, when the project's classpath
+  or the build no longer match it. An explicit :classpath always uses the
+  shared core.
 
   opts: :classpath (a string, or a seq of directories and jars, all of which
   must exist), :home (the JOLT_OPENLDK_HOME to use). Without :classpath, the
@@ -244,16 +289,20 @@
   class library at run time, so JAVA_HOME must name a JDK 25."
   ([] (init! {}))
   ([opts]
-   (let [want {:classpath (:classpath (project-classpath opts)) :dist (dist-dir opts)}]
+   (let [root (System/getProperty "user.dir")
+         dist (dist-dir opts)
+         want {:classpath (:classpath (project/resolve-classpath root (:classpath opts)))
+               :dist dist
+               :core (or (baked-core root opts) (str dist "/openldk.core"))}]
      (locking init-lock
        (let [{:keys [phase error] :as current} @state]
          (case phase
-           nil (start! want)
-           :ready (when (not= want (select-keys current [:classpath :dist]))
+           nil (do (check-baked! root want) (start! want))
+           :ready (when (not= want (select-keys current [:classpath :dist :core]))
                     (throw (ex-info (str "jolt-openldk: already set up with classpath " (:classpath current)
-                                         " from " (:dist current)
+                                         " from " (:dist current) " on core " (:core current)
                                          "; OpenLDK is set up once per process")
-                                    {:current (select-keys current [:classpath :dist]) :asked want})))
+                                    {:current (select-keys current [:classpath :dist :core]) :asked want})))
            :failed (throw (ex-info (str "jolt-openldk: an earlier init! failed after SBCL was started ("
                                         error "); restart the process")
                                    {:error error})))
