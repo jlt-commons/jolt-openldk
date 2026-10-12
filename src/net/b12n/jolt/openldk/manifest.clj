@@ -44,9 +44,11 @@
   (apply dissoc dist-manifest volatile-keys))
 
 (defn build
-  "The manifest stored beside a baked core."
-  [{:keys [entries warm dist-manifest counts]}]
-  {:classpath-entries (fingerprint entries)
+  "The manifest stored beside a baked core. `:fingerprint`, when given, is the
+  classpath's fingerprint taken earlier (before the bake) and is recorded as is;
+  otherwise it is taken now from `entries`."
+  [{:keys [entries warm dist-manifest counts] fp :fingerprint}]
+  {:classpath-entries (or fp (fingerprint entries))
    :warm (vec warm)
    :shared-build (shared-build dist-manifest)
    :counts counts})

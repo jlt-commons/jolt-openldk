@@ -21,6 +21,13 @@
 
 (defn- delete-quietly [path] (.delete (io/file path)))
 
+(defn ensure-unchanged!
+  "Throws unless the classpath fingerprint `after` the bake equals `before`:
+  a class or jar that changed while bake.sh ran is not what the core holds."
+  [before after]
+  (when (not= before after)
+    (fail "classpath changed during the bake; run it again" {:before before :after after})))
+
 (defn bake!
   "Bake the classpath of the project at (:root opts), default the current
   directory, into <root>/target/openldk. (:home opts) picks the build, as for
@@ -49,21 +56,28 @@
         (.mkdirs out)
         ;; A manifest left from an earlier bake must not vouch for this one.
         (doseq [p [core manifest-file counts-file core-tmp counts-tmp]] (delete-quietly p))
-        (let [{:keys [exit out err]} (apply sh script core-tmp counts-tmp classpath
-                                            (map #(str/replace % "." "/") warm))]
-          (spit log (str out err))
-          (when-not (zero? exit)
-            (doseq [p [core-tmp counts-tmp]] (delete-quietly p))
-            (fail (str "bake.sh exited " exit "; see " log) {:exit exit :log log}))
-          (let [counts (edn/read-string (slurp counts-tmp))]
-            (when-not (.renameTo (io/file core-tmp) (io/file core))
-              (fail (str "could not move " core-tmp " to " core) {:core core}))
-            (delete-quietly counts-tmp)
-            (spit counts-file (pr-str counts))
-            (spit manifest-file (pr-str (manifest/build {:entries entries :warm warm
-                                                         :dist-manifest dist-manifest
-                                                         :counts counts})))
-            counts))))))
+        (try
+          (let [before (manifest/fingerprint entries)
+                {:keys [exit out err]} (apply sh script core-tmp counts-tmp classpath
+                                              (map #(str/replace % "." "/") warm))]
+            (spit log (str out err))
+            (when-not (zero? exit)
+              (fail (str "bake.sh exited " exit "; see " log) {:exit exit :log log}))
+            (ensure-unchanged! before (manifest/fingerprint entries))
+            (let [counts (edn/read-string (slurp counts-tmp))]
+              (when-not (.renameTo (io/file core-tmp) (io/file core))
+                (fail (str "could not move " core-tmp " to " core) {:core core}))
+              (spit counts-file (pr-str counts))
+              (spit manifest-file (pr-str (manifest/build {:fingerprint before :entries entries
+                                                           :warm warm :dist-manifest dist-manifest
+                                                           :counts counts})))
+              counts))
+          (catch Throwable t
+            ;; A failed bake leaves no core, and no manifest to vouch for one.
+            (doseq [p [core manifest-file counts-file]] (delete-quietly p))
+            (throw t))
+          (finally
+            (doseq [p [core-tmp counts-tmp]] (delete-quietly p))))))))
 
 (defn -main [& _]
   (try
