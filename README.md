@@ -192,14 +192,58 @@ Mistakes on the Clojure side, such as a missing class, a wrong argument count, o
 
 `bb tour` runs `examples/tour`, which takes its classpath from its own `deps.edn` and works through `Math`, `StringBuilder`, `TreeMap`, `java.time` and a class of its own. Its date arithmetic and hex output were cross-checked against `date` and `printf`, since OpenLDK's correctness is the thing on trial.
 
+### Baking
+
+A shared core knows OpenLDK and the JDK's `invokedynamic` path, but not your classes, so the first call to each of your methods pays for its translation. Baking moves that cost to build time. It starts a separate SBCL process, loads your classpath, translates every method of the classes and jars on it, and dumps a core of its own.
+
+```sh
+bb bake                                      # in this repo: bakes the tour
+jolt -M -m net.b12n.jolt.openldk.bake        # in your project root
+```
+
+It needs the build, so `bb build` must have run on the same machine. It reads the classpath the way `init!` does and stops when the project declares none, because the `.` default isn't something to bake. It writes `openldk.core`, `bake-manifest.edn`, `bake.log` and `counts.edn` into `target/openldk/`, the manifest last, and prints every class or method it skipped or failed on before the totals. Keep `target/` out of git. If a bake fails it leaves no core and no manifest behind, and `init!` goes on using the shared core, which works but isn't baked.
+
+After that, `(ldk/init!)` with no arguments starts on the baked core, and `(:core (ldk/status))` says which core is in use. An explicit `:classpath` always uses the shared one.
+
+To compile JDK classes into the core too, list them in `deps.edn`:
+
+```clojure
+{:jolt-openldk/classpath ["target/classes"]
+ :jolt-openldk/warm ["java.time.LocalDate"]}
+```
+
+A class name OpenLDK can't find fails the bake.
+
+`init!` refuses a baked core, before it starts SBCL and naming what changed, when the manifest is missing or anything it recorded differs now. That covers the classpath string and its entries, the size and CRC32 of every class and jar on it, the warm list, and the shared build: the SBCL version and build-id, the OpenLDK commit, the JDK path and the bridge checksum. So every `bb build` means baking again. Once a process has started, a repeat `init!` with no arguments only checks the build directory.
+
+Some translation is still left for run time:
+
+- JDK methods that `warm` doesn't name. Warming a class covers that class's own methods only, so a warmed `LocalDate.of` still pays the static initializers of the other classes it touches on its first call.
+- A method with a lambda, which pays OpenLDK's lambda metafactory on its first call whether baked or not.
+
+Measured on an Apple M1 Pro on 2026-10-12, as the median of three runs. The first run after writing a core was thrown away, since the page cache skews it. The shared core's size is 143.6 MiB.
+
+| | shared core | baked |
+|---|---|---|
+| tour: bake time | | 9.7 s (10.2 s with `LocalDate` warmed) |
+| tour: core size | 143.6 MiB | 136.7 MiB (143.8 MiB with `LocalDate` warmed) |
+| tour: new `Counter` and its first `add` | 12 ms | 2 ms |
+| tour: first `LocalDate.of` | 442 ms | 441 ms, or 300 ms warmed |
+| tour: first call of a static method with a lambda | 123 ms | 111 ms |
+| commons-codec 1.15: bake time | | 12.8 s (953 methods in 106 classes) |
+| commons-codec 1.15: core size | 143.6 MiB | 158.8 MiB |
+| commons-codec 1.15: first `Hex.encodeHexString` | 106 ms | 81 ms |
+
+The win is real but small on these. Baking the tour's own class saved 10 ms, and the lambda case barely moved, because most of what a first call costs is JDK code that the bake didn't touch. `DigestUtils` fails on the shared core as well as the baked one, which is a gap in OpenLDK.
+
 ## What was measured
 
-On the machine above, 2026-10-09:
+On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 
-- Starting SBCL on the core (`ldk_init`) took 47 ms. The tour's whole `init!`, which adds OpenLDK's classpath setup, took 244 ms.
+- Starting SBCL on the core (`ldk_init`) took 47 ms. The tour's whole `init!`, which adds OpenLDK's classpath setup, took 244 ms. Measured again on 2026-10-12 against the larger warmed core, it took 277, 271 and 258 ms, a median of 271 ms.
 - A call that is already compiled: about 87 µs (2,000 `Math.max` calls in 175 ms). Nobody has profiled where that goes. The request and reply text is the obvious suspect, and a binary encoding would be the first thing to try if it ever matters.
 - A method's first call pays for its JIT translation. That is OpenLDK's cost and runs from milliseconds to seconds depending on how much of the JDK the method pulls in.
-- The first method with a string `+` or a lambda used to cost about 640 ms once per process, because OpenLDK compiles its `java.lang.invoke` classes on the first `invokedynamic`. The core now compiles them while it is built. On 2026-10-12 the tour's `Counter.add` took 635, 638 and 646 ms on its first call before and 6.1, 6.6 and 7.6 ms after, a median of 638 ms against 6.6 ms.
+- The first method with a string `+` used to cost about 640 ms once per process, because OpenLDK compiles its `java.lang.invoke` classes on the first `invokedynamic`. The core now compiles them while it is built. On 2026-10-12 a call to the tour's `Counter` class took 635, 638 and 646 ms on its first call before and 6.1, 6.6 and 7.6 ms after, a median of 638 ms against 6.6 ms. A lambda still costs more, because OpenLDK's lambda metafactory runs at call time: a static method building an `IntUnaryOperator` took a median of 123 ms on its first call, from runs of 123, 121 and 123 ms.
 - A callback from Java into Clojure: about 49 µs (a `Comparator` sort of 1,000 strings made 8,528 calls in 419 ms, sorting correctly).
 - jolt keeps working around it. Its collector, its other threads, and Ctrl-C (exit 130, the same as without OpenLDK) all behaved normally. A call from a second jolt thread works too.
 
@@ -239,7 +283,7 @@ bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing buil
 bb linux    # the same build, tests and tour on Linux in Docker; slow, so not part of gates
 ```
 
-Last run: wire tests 11 tests and 65 assertions, project tests 14 tests and 19 assertions, OpenLDK tests 18 tests and 151 assertions, all passing.
+Last run, 2026-10-12: wire tests 11 tests and 65 assertions, project tests 14 tests and 19 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 18 tests and 151 assertions, bake-script tests 6 tests and 29 assertions, bake tests 12 tests and 51 assertions, all passing.
 
 ## Licence
 
