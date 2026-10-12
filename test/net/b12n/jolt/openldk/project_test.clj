@@ -6,7 +6,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is run-tests]]
             [net.b12n.jolt.openldk :as ldk]
-            [net.b12n.jolt.openldk.project :as project]))
+            [net.b12n.jolt.openldk.project :as project]
+            [net.b12n.jolt.openldk.test-m2 :as test-m2]))
 
 (defn- temp-dir []
   (str (java.nio.file.Files/createTempDirectory
@@ -99,8 +100,7 @@
     (put! dir2 "deps.edn" "{:jolt-openldk/warm [\"java.time.LocalDate\" 3]}")
     (is (thrown-with-msg? Exception #":jolt-openldk/warm.*deps.edn" (project/warm-classes dir2)))))
 
-(def ^:private seeded
-  (str (System/getenv "JOLT_MAVEN_REPOSITORY") "/net/b12n/test/fixture/1.0/fixture-1.0.jar"))
+(def ^:private seeded (test-m2/seeded-jar "1.0"))
 
 (deftest deps-key-alone-is-the-deps-edn-source
   (let [dir (temp-dir)]
@@ -157,6 +157,7 @@
          (ldk/project-classpath))))
 
 (defn -main [& _]
+  (test-m2/require-seeded!)
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.project-test)]
     (shutdown-agents)
     (when (pos? (+ fail error)) (System/exit 1))))
