@@ -6,5 +6,6 @@
 (defn -main [& _]
   (ldk/init!)
   (println "add" (ldk/call-static "Fixture" "add" "(II)I" 40 2))
+  (println "date" (ldk/to-string (ldk/call-static "java.time.LocalDate" "of" "(III)Ljava/time/LocalDate;" 2024 2 29)))
   (println "core" (:core (ldk/status)))
   (shutdown-agents))

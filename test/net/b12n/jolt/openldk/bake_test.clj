@@ -52,7 +52,10 @@
          (is (zero? (:exit r)) (:err r))
          (is (str/includes? (:out r) "add 42"))
          (is (str/includes? (:out r) (str "core " fixture "/target/openldk/openldk.core")) core)
-         (is (not (re-find (re-pattern "; COMPILING Fixture\\.") (str (:out r) (:err r))))))))))
+         (is (str/includes? (:out r) "date 2024-02-29") (:out r))
+         (is (not (re-find (re-pattern "; COMPILING Fixture\\.") (str (:out r) (:err r)))))
+         (is (not (re-find (re-pattern "; COMPILING java/time/LocalDate\\.of") (str (:out r) (:err r))))
+             "a warmed JDK class compiles nothing at run time"))))))
 
 (deftest init-refuses-stale-core
   (when-built
@@ -99,6 +102,8 @@
 
 (defn- copy-fixture-with-warm [warm]
   (let [tmp (doto (java.io.File/createTempFile "warm" "") .delete .mkdirs)]
+    (.mkdirs (io/file tmp "src"))
+    (io/copy (io/file fixture "src/bakecheck.clj") (io/file tmp "src/bakecheck.clj"))
     (spit (io/file tmp "deps.edn")
           (pr-str {:deps {'net.b12n/jolt-openldk {:local/root (.getAbsolutePath (io/file "."))}}
                    :jolt-openldk/classpath [(.getAbsolutePath (io/file "target/test-classes"))]
@@ -118,6 +123,9 @@
        (let [r (bake! (str tmp))
              left (set (.list (io/file tmp "target/openldk")))]
          (is (pos? (:exit r)))
+         ;; stderr names only the log; the reason, with the class name, is in it
+         (is (re-find (re-pattern "bake: unknown warm class java/time/NoSuch")
+                      (slurp (io/file tmp "target/openldk/bake.log"))))
          (is (not (contains? left "openldk.core")) (pr-str left))
          (is (not (contains? left "bake-manifest.edn")) (pr-str left))
          (is (not-any? #(str/ends-with? % ".tmp") left) (pr-str left)))
@@ -137,6 +145,35 @@
         (is (thrown-with-msg? Exception (re-pattern "classpath changed during the bake")
                               (bake/ensure-unchanged! before (manifest/fingerprint entries)))))
       (finally (delete-tree tmp)))))
+
+(deftest warm-list-change-makes-core-stale
+  (when-built
+   (let [tmp (copy-fixture-with-warm ["java.time.LocalDate"])]
+     (try
+       (is (zero? (:exit (bake! (str tmp)))))
+       (is (zero? (:exit (jolt (str tmp) "-m" "bakecheck"))) "fresh core is accepted")
+       (spit (io/file tmp "deps.edn")
+             (pr-str {:deps {'net.b12n/jolt-openldk {:local/root (.getAbsolutePath (io/file "."))}}
+                      :jolt-openldk/classpath [(.getAbsolutePath (io/file "target/test-classes"))]
+                      :jolt-openldk/warm ["java.time.LocalDate" "java.time.LocalTime"]}))
+       (let [r (jolt (str tmp) "-m" "bakecheck")]
+         (is (pos? (:exit r)))
+         (is (str/includes? (:err r) "stale") (:err r))
+         (is (str/includes? (:err r) "warm") (:err r)))
+       (finally (delete-tree tmp))))))
+
+(deftest an-unwarmed-class-does-compile-at-run-time
+  ;; The control for the warm check above: without the warm key the same call
+  ;; compiles LocalDate.of when it runs.
+  (when-built
+   (let [tmp (copy-fixture-with-warm [])]
+     (try
+       (is (zero? (:exit (bake! (str tmp)))))
+       (let [r (sh "jolt" "-m" "bakecheck" :dir (str tmp)
+                   :env (assoc (into {} (System/getenv)) "LDK_DEBUG" "L"))]
+         (is (zero? (:exit r)) (:err r))
+         (is (re-find (re-pattern "; COMPILING java/time/LocalDate\\.of") (str (:out r) (:err r)))))
+       (finally (delete-tree tmp))))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.bake-test)]
