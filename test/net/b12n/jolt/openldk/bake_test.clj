@@ -163,6 +163,35 @@
                               (bake/ensure-unchanged! before (manifest/fingerprint entries)))))
       (finally (delete-tree tmp)))))
 
+(deftest the-bake-summary-lists-every-skipped-and-failed-line
+  (let [lines (concat ["bake: /x/a.jar: 3 classes" "; COMPILING Foo"]
+                      (for [i (range 8)] (str "bake: skipped C" i ": classload returned NIL"))
+                      ["bake: failed C.m: JIT-ERROR" "bake: counts {:classes-skipped 8}"])]
+    (is (= (concat (for [i (range 8)] (str "bake: skipped C" i ": classload returned NIL"))
+                   ["bake: failed C.m: JIT-ERROR"])
+           (bake/report-lines (str/join "\n" lines))))
+    (is (= [] (bake/report-lines "bake: counts {}\nnothing")))))
+
+(deftest the-bake-driver-prints-a-skipped-class
+  ;; Sub extends Gone, whose class file is absent from the classpath.
+  (when-built
+   (let [tmp (doto (java.io.File/createTempFile "skip" "") .delete .mkdirs)
+         classes (io/file tmp "classes")]
+     (try
+       (.mkdirs classes)
+       (apply sh (str (System/getenv "JAVA_HOME") "/bin/javac") "--release" "25" "-d" (str classes)
+              (map str (.listFiles (io/file "test/java/missing"))))
+       (io/delete-file (io/file classes "Gone.class"))
+       (.mkdirs (io/file tmp "src"))
+       (spit (io/file tmp "deps.edn")
+             (pr-str {:deps {'net.b12n/jolt-openldk {:local/root (.getAbsolutePath (io/file "."))}}
+                      :jolt-openldk/classpath [(str classes)]}))
+       (let [r (bake! (str tmp))]
+         (is (zero? (:exit r)) (:err r))
+         (is (str/includes? (:out r) "bake: skipped Sub: ") (:out r))
+         (is (< (str/index-of (:out r) "bake: skipped Sub") (str/index-of (:out r) "counts")) (:out r)))
+       (finally (delete-tree tmp))))))
+
 (deftest warm-list-change-makes-core-stale
   (when-built
    (let [tmp (copy-fixture-with-warm ["java.time.LocalDate"])]
