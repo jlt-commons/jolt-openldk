@@ -104,6 +104,20 @@
     (is (str/includes? (first ps) "abc"))
     (is (str/includes? (first ps) "def"))))
 
+(deftest validate-refuses-changed-sbcl-build-id-and-bridge
+  (let [{:keys [jar]} (fixture)
+        d (assoc dist :sbcl-build-id "id-1" :bridge "1-2+3-4")
+        b (manifest/build {:entries [jar] :warm ["a.B"] :dist-manifest d})
+        cur (fn [d'] {:entries [jar] :warm ["a.B"] :dist-manifest d'})]
+    (is (= [] (manifest/problems b (cur d))))
+    (let [ps (manifest/problems b (cur (assoc d :sbcl-build-id "id-2")))]
+      (is (= 1 (count ps)))
+      (is (str/includes? (first ps) ":sbcl-build-id"))
+      (is (str/includes? (first ps) "id-2")))
+    (let [ps (manifest/problems b (cur (assoc d :bridge "9-9+9-9")))]
+      (is (= 1 (count ps)))
+      (is (str/includes? (first ps) ":bridge")))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.manifest-test)]
     (shutdown-agents)

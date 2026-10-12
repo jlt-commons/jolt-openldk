@@ -124,14 +124,21 @@ else
 fi
 
 # --- 4. bake.sh -----------------------------------------------------------------
+# SBCL's runtime refuses a core dumped by a different build of itself, by
+# aborting the process, so the build-id goes into the manifest and bake.sh.
+SBCL_BUILD_ID=$(tr -d '"' < "$SBCL_SRC/output/build-id.inc" | tr -d '\n')
+[ -n "$SBCL_BUILD_ID" ] || die "no SBCL build-id in $SBCL_SRC/output/build-id.inc"
+BRIDGE_SUM="$(cksum < "$HERE/bridge.lisp" | tr ' ' '-')+$(cksum < "$HERE/ldk.c" | tr ' ' '-')"
 # A copy of bridge.lisp goes along, so dist/ does not depend on this checkout.
 cp "$HERE/bridge.lisp" "$DIST/bridge.lisp"
 sed -e "s|@WORK@|$WORK|" -e "s|@BRIDGE@|$DIST/bridge.lisp|" \
-    -e "s|@SBCL_VERSION@|$SBCL_VERSION|" "$HERE/bake.sh" > "$DIST/bake.sh"
+    -e "s|@SBCL_VERSION@|$SBCL_VERSION|" -e "s|@SBCL_BUILD_ID@|$SBCL_BUILD_ID|" "$HERE/bake.sh" > "$DIST/bake.sh"
 chmod +x "$DIST/bake.sh"
 
 cat > "$DIST/manifest.edn" <<EOF
 {:sbcl "$SBCL_VERSION"
+ :sbcl-build-id "$SBCL_BUILD_ID"
+ :bridge "$BRIDGE_SUM"
  :openldk "$OPENLDK_REF"
  :java-home "$JAVA_HOME"
  :bake-script "$DIST/bake.sh"

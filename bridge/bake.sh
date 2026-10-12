@@ -32,6 +32,12 @@ OPENLDK=$WORK/openldk
 [ -x "$SBCL_SRC/run-sbcl.sh" ] && [ -d "$OPENLDK" ] \
   || { echo "bake.sh: no work tree in $WORK; run bb build" >&2; exit 1; }
 
+# A core only starts on the SBCL build that dumped it. If SBCL was rebuilt since
+# bb build, the dist's runtime is not the one this script would dump with.
+BUILD_ID_FILE=$SBCL_SRC/output/build-id.inc
+[ "$(tr -d '"' < "$BUILD_ID_FILE" 2>/dev/null | tr -d '\n')" = "@SBCL_BUILD_ID@" ] \
+  || { echo "bake.sh: SBCL in $WORK was rebuilt since the dist was built (build-id is not @SBCL_BUILD_ID@); re-run bb build" >&2; exit 1; }
+
 # The Lisp reads its arguments from the environment, so nothing needs quoting.
 SELF=""
 if [ "${1:-}" = "--self-test" ]; then

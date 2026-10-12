@@ -83,6 +83,21 @@
        (is (str/includes? err "classpath entries must be absolute") err)))
    (is (str/includes? (:err (bake "target/test-classes")) "target/test-classes"))))
 
+(deftest bake-script-refuses-a-rebuilt-sbcl
+  ;; A copy of bake.sh that expects another build-id, as if SBCL had been
+  ;; rebuilt since bb build.
+  (when-built
+   (let [dir (tmp-dir)
+         copy (str dir "/bake.sh")
+         id (:sbcl-build-id (edn/read-string (slurp (str (ldk/dist-dir) "/manifest.edn"))))]
+     (is (string? id))
+     (spit copy (str/replace (slurp (bake-script)) id "some-other-build-id"))
+     (.setExecutable (io/file copy) true)
+     (let [{:keys [exit err]} (sh copy (str dir "/c.core") (str dir "/c.edn") classes)]
+       (is (pos? exit))
+       (is (str/includes? err "re-run bb build") err)
+       (is (not (.exists (io/file dir "c.core"))))))))
+
 (deftest bake-script-failure-detector
   ;; No method has failed to compile on any classpath tried, so the classifier
   ;; of %compile-method's output is checked directly.
