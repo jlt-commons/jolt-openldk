@@ -6,6 +6,7 @@
 #   libsbcl.dylib        SBCL's runtime as a shared library (.so on Linux)
 #   libjoltopenldk.dylib the C shim from ldk.c, linked against it
 #   openldk.core         SBCL core: OpenLDK warmed up, plus bridge.lisp
+#   bake.sh, bridge.lisp bakes a classpath into a core (see bake.sh)
 #   manifest.edn         what was built, from which sources
 #
 # Needs: a working `sbcl` on PATH (only to compile SBCL), `ocicl`, `git`, `cc`,
@@ -122,10 +123,18 @@ else
      -L"$DIST" -lsbcl -ldl -Wl,-rpath,'$ORIGIN'
 fi
 
+# --- 4. bake.sh -----------------------------------------------------------------
+# A copy of bridge.lisp goes along, so dist/ does not depend on this checkout.
+cp "$HERE/bridge.lisp" "$DIST/bridge.lisp"
+sed -e "s|@WORK@|$WORK|" -e "s|@BRIDGE@|$DIST/bridge.lisp|" \
+    -e "s|@SBCL_VERSION@|$SBCL_VERSION|" "$HERE/bake.sh" > "$DIST/bake.sh"
+chmod +x "$DIST/bake.sh"
+
 cat > "$DIST/manifest.edn" <<EOF
 {:sbcl "$SBCL_VERSION"
  :openldk "$OPENLDK_REF"
  :java-home "$JAVA_HOME"
+ :bake-script "$DIST/bake.sh"
  :built "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF
 echo "== done: $DIST"

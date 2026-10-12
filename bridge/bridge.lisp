@@ -556,6 +556,9 @@ among ARGS reach Clojure as borrowed handles, released when it replies."
 
 (defvar *ldk-set-up* nil)
 
+;; The classpath a baked core was compiled for, or NIL in the shared core.
+(defvar *ldk-baked-classpath* nil)
+
 (defun %ldk-dispatch (request)
   (destructuring-bind (op &rest rest) request
     (unless (or *ldk-set-up* (eq op :setup))
@@ -563,6 +566,11 @@ among ARGS reach Clojure as borrowed handles, released when it replies."
     (ecase op
       (:setup
        (when *ldk-set-up* (error "already set up; OpenLDK sets its classpath once"))
+       ;; OpenLDK itself takes any classpath here without complaint, so on a
+       ;; baked core this comparison is the only thing that refuses a mismatch.
+       (when (and *ldk-baked-classpath* (not (equal (first rest) *ldk-baked-classpath*)))
+         (error "this core was baked for classpath ~S but setup asked for ~S"
+                *ldk-baked-classpath* (first rest)))
        (%main-runtime-setup (first rest) nil nil)
        (setf *ldk-set-up* t)
        '(:void))
@@ -707,7 +715,14 @@ watchdog %main-runtime-setup starts)."
   (loop for thread in (bt:all-threads)
         unless (eq thread (bt:current-thread))
           do (bt:destroy-thread thread))
-  (sleep 0.2))
+  ;; bt:destroy-thread is asynchronous: wait until the others are really gone.
+  (loop repeat 100
+        until (null (remove (bt:current-thread) (bt:all-threads)))
+        do (sleep 0.05))
+  (let ((left (remove (bt:current-thread) (bt:all-threads))))
+    (when left
+      (error "threads still alive after 5 s, so the core cannot be saved: ~S"
+             (mapcar #'bt:thread-name left)))))
 
 (defun make-jolt-openldk-core (path)
   "Dump a library core: OpenLDK warmed as its own make-image warms it, plus the
@@ -717,3 +732,130 @@ to publish."
   (%ldk-warm-invoke)
   (%ldk-prepare-dump)
   (sb-ext:save-lisp-and-die path :callable-exports '(ldk_entry)))
+
+;;; --- Baking: load every class on a classpath, compile every method ------------
+
+(defun %ldk-bake-log (fmt &rest args)
+  (apply #'format *error-output* (concatenate 'string "~&bake: " fmt "~%") args)
+  (finish-output *error-output*))
+
+(defun %ldk-compile-failure-line (text)
+  "The first line of TEXT that reports a failed compile, or NIL. %compile-method
+does not signal when a method fails: it prints ;; JIT-ERROR (or COMPILE-ERROR /
+FALLBACK-ERROR), installs a stub that errors when called, and returns normally."
+  (with-input-from-string (in text)
+    (loop for line = (read-line in nil)
+          while line
+          when (some (lambda (marker) (search marker line))
+                     '("JIT-ERROR" "COMPILE-ERROR" "FALLBACK-ERROR"))
+            return (string-trim " " line))))
+
+(defun %ldk-bake-self-test ()
+  "Exercise the failure classifier, which no real method has ever tripped."
+  (flet ((check (what ok)
+           (unless ok (error "bake self-test failed: ~A" what))))
+    (check "JIT-ERROR" (%ldk-compile-failure-line (format nil ";; JIT-ERROR Foo.bar: boom~%more")))
+    (check "COMPILE-ERROR" (%ldk-compile-failure-line (format nil "noise~%;; COMPILE-ERROR x")))
+    (check "FALLBACK-ERROR" (%ldk-compile-failure-line ";; FALLBACK-ERROR x"))
+    (check "first line wins"
+           (string= (%ldk-compile-failure-line (format nil ";; JIT-ERROR one~%;; JIT-ERROR two"))
+                    ";; JIT-ERROR one"))
+    (check "clean text" (null (%ldk-compile-failure-line (format nil "; COMPILING Foo~%done"))))
+    (check "empty text" (null (%ldk-compile-failure-line ""))))
+  (%ldk-bake-log "self-test ok"))
+
+(defun %ldk-bake-class-names (entry)
+  "Binary names (slashed) of every class in one classpath entry (a jar or a
+directory), without module-info and the multi-release META-INF/versions copies."
+  (flet ((wanted (name)
+           (not (or (search "META-INF/versions/" name)
+                    (string= (file-namestring name) "module-info.class")))))
+    (cond
+      ((and (> (length entry) 4) (string-equal ".jar" entry :start2 (- (length entry) 4)))
+       ;; A private entry, closed again so no open stream reaches the dump.
+       (let ((jar (make-instance 'jar-classpath-entry :jarfile entry)))
+         (unwind-protect
+              (loop for n in (list-jar-classes jar)
+                    when (wanted n) collect (subseq n 0 (- (length n) 6)))
+           (when (slot-boundp jar 'zipfile-entries)
+             (zip:close-zipfile (slot-value jar 'zipfile))))))
+      (t
+       (let ((base (truename (uiop:ensure-directory-pathname entry))))
+         (loop for f in (directory (merge-pathnames "**/*.class" base))
+               for rel = (enough-namestring f base)
+               when (wanted rel) collect (subseq rel 0 (- (length rel) 6))))))))
+
+(defun %ldk-bake-compile-class (bin-name counts)
+  "Compile every method of BIN-NAME, adding to the plist in the cons COUNTS."
+  (let* ((class (%get-ldk-class-by-bin-name bin-name))
+         (methods (slot-value class 'methods)))
+    (dotimes (i (length methods))
+      (let* ((m (aref methods i))
+             (code (gethash "Code" (slot-value m 'attributes))))
+        (if (null code)
+            (incf (getf (car counts) :methods-no-code))
+            (let* ((err (make-string-output-stream))
+                   (failure
+                     (handler-case
+                         (progn
+                           (let ((*error-output* (make-broadcast-stream *error-output* err)))
+                             (%compile-method bin-name (1+ i)))
+                           (%ldk-compile-failure-line (get-output-stream-string err)))
+                       (error (e) (format nil "~A" e)))))
+              (when (> (length (slot-value code 'code)) 5000)
+                (incf (getf (car counts) :methods-interpreted)))
+              (cond (failure
+                     (incf (getf (car counts) :methods-failed))
+                     (%ldk-bake-log "failed ~A.~A: ~A" bin-name (slot-value m 'name) failure))
+                    (t (incf (getf (car counts) :methods-compiled))))))))))
+
+(defun %ldk-bake-load-and-compile (bin-name counts)
+  "Load BIN-NAME and compile its methods. Returns NIL, after logging, when the
+class cannot be loaded: classload returns NIL for a missing superclass instead
+of signalling."
+  (handler-case
+      (progn
+        (unless (classload bin-name) (error "classload returned NIL"))
+        (incf (getf (car counts) :classes-loaded))
+        (%ldk-bake-compile-class bin-name counts)
+        t)
+    (error (e)
+      (incf (getf (car counts) :classes-skipped))
+      (%ldk-bake-log "skipped ~A: ~A" bin-name e)
+      nil)))
+
+(defun make-jolt-openldk-baked-core (core-path classpath warm-classes counts-path)
+  "Dump a core for CLASSPATH (a colon-joined string): OpenLDK warmed as in
+make-jolt-openldk-core, every class on the classpath loaded and every method
+compiled, then WARM-CLASSES (binary names such as java/time/LocalDate) the same
+way. Writes an EDN map of counts to COUNTS-PATH. A warm class that does not
+load, or no loadable class at all, is an error and nothing is dumped."
+  (initialize)
+  (%ldk-warm-invoke)
+  (%main-runtime-setup classpath nil nil)
+  (let ((counts (list (list :classes-loaded 0 :classes-skipped 0 :methods-compiled 0
+                            :methods-failed 0 :methods-interpreted 0 :methods-no-code 0))))
+    ;; Enumerate from the string: setup appends the JDK's own entries to
+    ;; *classpath*, and those are not jars or directories.
+    (dolist (entry (remove "" (split-sequence:split-sequence #\: classpath) :test #'string=))
+      (let ((names (%ldk-bake-class-names entry)))
+        (%ldk-bake-log "~A: ~D classes" entry (length names))
+        (dolist (n names) (%ldk-bake-load-and-compile n counts))))
+    (dolist (w warm-classes)
+      (let ((n (substitute #\/ #\. w)))
+        (unless (%ldk-bake-load-and-compile n counts)
+          (%ldk-bake-log "unknown warm class ~A" w)
+          (error "bake: unknown warm class ~A" w))))
+    (with-open-file (o counts-path :direction :output :if-exists :supersede)
+      ;; EDN, so keywords are lower case.
+      (loop initially (write-char #\{ o)
+            for (k v) on (car counts) by #'cddr
+            for first = t then nil
+            do (format o "~:[ ~;~]:~(~A~) ~D" first k v)
+            finally (format o "}~%")))
+    (%ldk-bake-log "counts ~S" (car counts))
+    (when (zerop (getf (car counts) :classes-loaded))
+      (error "bake: no class on ~S could be loaded" classpath))
+    (setf *ldk-baked-classpath* classpath)
+    (%ldk-prepare-dump)
+    (sb-ext:save-lisp-and-die core-path :callable-exports '(ldk_entry))))
