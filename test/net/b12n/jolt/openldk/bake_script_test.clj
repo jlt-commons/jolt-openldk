@@ -11,7 +11,7 @@
             [clojure.test :refer [deftest is run-tests]]
             [net.b12n.jolt.openldk :as ldk]))
 
-(def classes (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes"))
+(def classes (.getAbsolutePath (io/file (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes"))))
 
 (def have-build?
   (let [dist (ldk/dist-dir)]
@@ -73,6 +73,15 @@
      (is (not (zero? exit)))
      (is (not (.exists (io/file core))))
      (is (str/includes? err "java/time/NoSuch") err))))
+
+(deftest bake-script-refuses-relative-classpath
+  (when-built
+   (doseq [cp ["target/test-classes" (str classes ":rel/dir") (str classes ":")]]
+     (let [{:keys [exit core err]} (bake cp)]
+       (is (= 2 exit) cp)
+       (is (not (.exists (io/file core))) cp)
+       (is (str/includes? err "classpath entries must be absolute") err)))
+   (is (str/includes? (:err (bake "target/test-classes")) "target/test-classes"))))
 
 (deftest bake-script-failure-detector
   ;; No method has failed to compile on any classpath tried, so the classifier
