@@ -199,6 +199,7 @@ On the machine above, 2026-10-09:
 - Starting SBCL on the core (`ldk_init`) took 47 ms. The tour's whole `init!`, which adds OpenLDK's classpath setup, took 244 ms.
 - A call that is already compiled: about 87 µs (2,000 `Math.max` calls in 175 ms). Nobody has profiled where that goes. The request and reply text is the obvious suspect, and a binary encoding would be the first thing to try if it ever matters.
 - A method's first call pays for its JIT translation. That is OpenLDK's cost and runs from milliseconds to seconds depending on how much of the JDK the method pulls in.
+- The first method with a string `+` or a lambda used to cost about 640 ms once per process, because OpenLDK compiles its `java.lang.invoke` classes on the first `invokedynamic`. The core now compiles them while it is built. On 2026-10-12 the tour's `Counter.add` took 635, 638 and 646 ms on its first call before and 6.1, 6.6 and 7.6 ms after, a median of 638 ms against 6.6 ms.
 - A callback from Java into Clojure: about 49 µs (a `Comparator` sort of 1,000 strings made 8,528 calls in 419 ms, sorting correctly).
 - jolt keeps working around it. Its collector, its other threads, and Ctrl-C (exit 130, the same as without OpenLDK) all behaved normally. A call from a second jolt thread works too.
 
