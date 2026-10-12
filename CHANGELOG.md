@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- CI uses the Node 24 releases of `actions/checkout` (v7), `actions/setup-java`
+  (v6) and `actions/cache` (v6). GitHub had started warning that the v4
+  releases target the deprecated Node 20.
+
 - Baked cores (jlt-commons/jolt-openldk#3). `bb bake`, or
   `jolt -M -m net.b12n.jolt.openldk.bake` in a project root, translates the
   project's classpath, plus any JDK classes named under `:jolt-openldk/warm` in
@@ -16,7 +20,7 @@
   named in `warm` still translate at run time.
 
 - The shared core warms OpenLDK's `invokedynamic` path while it is built, so the
-  first method with a string `+` no longer costs about 650 ms. A method with a
+  first method with a string `+` no longer costs about 640 ms. A method with a
   lambda still pays about 110 ms on its first call in OpenLDK's lambda
   metafactory.
   The pre-dump cleanup is now `%ldk-prepare-dump` and also destroys
