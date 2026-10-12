@@ -771,7 +771,7 @@ directory), without module-info and the multi-release META-INF/versions copies."
            (not (or (search "META-INF/versions/" name)
                     (string= (file-namestring name) "module-info.class")))))
     (cond
-      ((and (> (length entry) 4) (string-equal ".jar" entry :start2 (- (length entry) 4)))
+      ((and (> (length entry) 4) (string= ".jar" entry :start2 (- (length entry) 4)))
        ;; A private entry, closed again so no open stream reaches the dump.
        (let ((jar (make-instance 'jar-classpath-entry :jarfile entry)))
          (unwind-protect

@@ -192,6 +192,19 @@
          (is (< (str/index-of (:out r) "bake: skipped Sub") (str/index-of (:out r) "counts")) (:out r)))
        (finally (delete-tree tmp))))))
 
+(deftest bake-names-missing-classpath-entries-and-takes-a-relative-root
+  ;; A relative root: the entry in the message must be absolute, as bake.sh needs.
+  (let [tmp (doto (java.io.File/createTempFile "miss" "") .delete .mkdirs)]
+    (try
+      (spit (io/file tmp "deps.edn") (pr-str {:jolt-openldk/classpath ["nope/classes" "gone.jar"]}))
+      (let [rel (str (.relativize (.toPath (.getAbsoluteFile (io/file "."))) (.toPath tmp)))
+            e (try (bake/bake! {:root rel}) nil (catch Exception e e))]
+        (is (some? e))
+        (is (str/includes? (ex-message e) "do not exist") (ex-message e))
+        (is (re-find (re-pattern "do not exist: /.*/nope/classes, ") (ex-message e)) (ex-message e))
+        (is (str/includes? (ex-message e) "gone.jar")))
+      (finally (delete-tree tmp)))))
+
 (deftest warm-list-change-makes-core-stale
   (when-built
    (let [tmp (copy-fixture-with-warm ["java.time.LocalDate"])]
