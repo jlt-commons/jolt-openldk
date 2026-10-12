@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: DeLaGuardo/setup-clojure@13.7.0
         with:
           bb: ${{ env.BB_VERSION }}
@@ -36,8 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
@@ -58,7 +58,7 @@ jobs:
           sudo install -m 755 /tmp/ocicl /usr/local/bin/ocicl
       # SBCL is the slow part and depends only on its version and the build
       # script; the core and shim are rebuilt every run.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/jolt-openldk/work/sbcl-2.6.9
           key: sbcl-2.6.9-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bridge/build.sh') }}
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the image
         run: docker build -t jolt-openldk-linux linux/
       - name: Build and test inside it
@@ -86,8 +86,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
@@ -96,7 +96,7 @@ jobs:
           version: ${{ env.JOLT_VERSION }}
       - name: Install SBCL, ocicl, babashka and clj-kondo
         run: brew install sbcl ocicl borkdude/brew/babashka borkdude/brew/clj-kondo
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/jolt-openldk/work/sbcl-2.6.9
           key: sbcl-2.6.9-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bridge/build.sh') }}
