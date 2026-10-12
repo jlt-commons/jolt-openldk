@@ -9,7 +9,14 @@
           (throw (ex-info "JAVA_HOME is not set; OpenLDK and javac both need a JDK 25" {}))))
     (defn javac! [out & sources]
       (fs/create-dirs out)
-      (apply shell (str (java-home) "/bin/javac") "--release" "25" "-d" out sources)))
+      (apply shell (str (java-home) "/bin/javac") "--release" "25" "-d" out sources))
+    (defn seed-m2! []
+      (doseq [v ["1.0" "2.0"]]
+        (let [dir (str "target/test-m2/net/b12n/test/fixture/" v)
+              jar (str dir "/fixture-" v ".jar")]
+          (fs/create-dirs dir)
+          (fs/delete-if-exists jar)
+          (shell (str (java-home) "/bin/jar") "cf" jar "-C" "target/test-classes" ".")))))
 
   info
   {:doc "What each task does"
@@ -28,13 +35,16 @@
 
   test
   {:doc "Run the tests"
-   :task (do (javac! "target/test-classes" "test/java/Fixture.java")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.manifest-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test"))}
+   :task (let [m2 {:extra-env {"JOLT_MAVEN_REPOSITORY" (str (fs/absolutize "target/test-m2"))}}]
+           (javac! "target/test-classes" "test/java/Fixture.java")
+           (seed-m2!)
+           (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
+           (shell m2 "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
+           (shell m2 "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.maven-test")
+           (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.manifest-test")
+           (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
+           (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
+           (shell m2 "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test"))}
 
   tour
   {:doc "Walk through the API against a real OpenLDK"
