@@ -115,18 +115,26 @@ The result in `dist/` is a 146 MB core, a 412 KB `libsbcl.dylib` and a 34 KB shi
 
 `init!` takes its classpath from the first of three sources that applies, so with no arguments it finds the project's classpath itself. That source is the whole classpath, and nothing merges across them.
 
-1. An explicit `:classpath` passed to `init!`, as a vector or a colon-separated string.
-2. A `:jolt-openldk/classpath` vector in the `deps.edn` of the current directory. A key that is present wins even when its vector is empty, and a value that isn't a vector throws.
+1. An explicit `:classpath` passed to `init!`, as a vector or a colon-separated string. It ignores `deps.edn` altogether.
+2. The `deps.edn` of the current directory, when it has a `:jolt-openldk/deps` map, a `:jolt-openldk/classpath` vector, or both. Either key makes `deps.edn` the source. A key that is present wins even when it is empty (`{}` or `[]`), a key set to `nil` counts as absent, and a value of the wrong type throws. Coordinate jars come first, then the `:jolt-openldk/classpath` entries.
 3. The `jvm/` folder, when it holds `*.jar` files at its top level, `.class` files anywhere under it, or both. The jars go in by name, and `jvm/` itself comes last if it has class files.
 
 With none of these, the classpath is `.`.
 
 ```clojure
 {:paths ["src"]
+ :jolt-openldk/deps      {commons-codec/commons-codec {:mvn/version "1.17.1"}}
  :jolt-openldk/classpath ["target/classes" "lib/some.jar"]}
 ```
 
-Relative entries resolve against the directory jolt was started from, not against wherever the `deps.edn` file lives, so start the process in the project root. `(ldk/project-classpath)` returns what `init!` would use, with the `:source` it came from, which helps when the classpath isn't the one you expected.
+`:jolt-openldk/deps` names Java libraries by Maven coordinate: a qualified symbol mapped to exactly `{:mvn/version "<version>"}`. Anything else in the map, such as `:exclusions` or `:git/url`, is rejected. Jolt's own resolver (`jolt.deps/resolve-deps`, so jolt 0.8.19 or later) fetches the jars from Clojars, then Maven Central, into `~/.m2/repository`, or into `$JOLT_MAVEN_REPOSITORY` when that is set. A jar already in that directory needs no network. A coordinate that can't be resolved stops `init!` with an error that names it, before SBCL starts:
+
+```
+jolt-openldk: cannot resolve :jolt-openldk/deps: Error building classpath. The following artifacts could not be resolved:
+  no.such/lib 1.0 (not found in any repository, naming the two it tried)
+```
+
+Relative entries resolve against the directory jolt was started from, not against wherever the `deps.edn` file lives, so start the process in the project root. `(ldk/project-classpath)` returns what `init!` would use, with the `:source` it came from, the `:entries` in order and, when coordinates were resolved, the `:libs` map, which helps when the classpath isn't the one you expected. For the `deps.edn` above it returns `:source :deps-edn`, with the codec jar at `~/.m2/repository/commons-codec/commons-codec/1.17.1/commons-codec-1.17.1.jar` as the first entry and `target/classes` after it.
 
 Methods are named the way JNI names them, a name plus a descriptor, because Java overloads. The descriptor's return type also tells the bridge how to hand back the result:
 
@@ -201,7 +209,7 @@ bb bake                                      # in this repo: bakes the tour
 jolt -M -m net.b12n.jolt.openldk.bake        # in your project root
 ```
 
-It needs the build, so `bb build` must have run on the same machine. It reads the classpath the way `init!` does and stops when the project declares none, because the `.` default isn't something to bake. It writes `openldk.core`, `bake-manifest.edn`, `bake.log` and `counts.edn` into `target/openldk/`, the manifest last, and prints every class or method it skipped or failed on before the totals. Keep `target/` out of git. If a bake fails it leaves no core and no manifest behind, and `init!` goes on using the shared core, which works but isn't baked.
+It needs the build, so `bb build` must have run on the same machine. It reads the classpath the way `init!` does, coordinate jars included, and stops when the project declares none, because the `.` default isn't something to bake. It writes `openldk.core`, `bake-manifest.edn`, `bake.log` and `counts.edn` into `target/openldk/`, the manifest last, and prints every class or method it skipped or failed on before the totals. Keep `target/` out of git. If a bake fails it leaves no core and no manifest behind, and `init!` goes on using the shared core, which works but isn't baked.
 
 After that, `(ldk/init!)` with no arguments starts on the baked core, and `(:core (ldk/status))` says which core is in use. An explicit `:classpath` always uses the shared one.
 
@@ -249,6 +257,7 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 
 ## What doesn't work yet
 
+- **Only direct dependencies.** A coordinate under `:jolt-openldk/deps` brings in its own jar and nothing else, because jolt doesn't read the POMs of Java-only jars. List the library's dependencies as coordinates too. `org.apache.httpcomponents/httpclient` 4.5.14 needs `httpcore` 4.4.16, `commons-logging` 1.2 and `commons-codec` 1.11, for example. A bake's summary lists the classes it skipped, which is where a missing dependency shows up. `:exclusions`, `:mvn/repos` and classifiers aren't supported.
 - **Bulk arrays.** Every element crosses as text. Measured with 100,000 elements, a `byte[]` or an `int[]` took about 60 ms to build from a vector and 260 to 330 ms to read back across two runs, and came back equal. A million `int`s took 0.7 s in and 3.4 s out. Fine for configuration, slow for image data.
 - **Implementing a class.** `implement` takes interfaces only. Subclassing an abstract class from Clojure isn't supported.
 - **Wrapped callback exceptions.** The original Clojure throwable comes back only when the `RuntimeException` itself reaches your call. If Java wraps it in another exception first, you get the wrapper as an `ex-info`.
@@ -278,12 +287,20 @@ On a network that inspects TLS, Zscaler for instance, ocicl can't fetch from ghc
 ## Tests
 
 ```sh
-bb test     # wire and project tests always (the project tests need no build); the OpenLDK tests skip without a build
+bb test     # wire, project and maven tests always (the project tests need no build); the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 bb linux    # the same build, tests and tour on Linux in Docker; slow, so not part of gates
+
+The project, maven and bake test namespaces resolve coordinates against a local Maven repository that `bb test` and `bb gates` seed at `target/test-m2`. To run one of them by hand, set the variable yourself, or the test stops and says so:
+
+```sh
+JOLT_MAVEN_REPOSITORY=$PWD/target/test-m2 jolt -A:test -m net.b12n.jolt.openldk.maven-test
 ```
 
-Last run, 2026-10-12: wire tests 11 tests and 65 assertions, project tests 14 tests and 19 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 18 tests and 151 assertions, bake-script tests 6 tests and 29 assertions, bake tests 12 tests and 51 assertions, all passing.
+The missing-coordinate test in the bake tests contacts Clojars and Maven Central.
+```
+
+Last run, 2026-10-12: wire tests 11 tests and 65 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 18 tests and 151 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, all passing.
 
 ## Licence
 
