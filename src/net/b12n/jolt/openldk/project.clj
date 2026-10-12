@@ -3,11 +3,14 @@
 (ns net.b12n.jolt.openldk.project
   "Finds the Java classpath of a project. The first source that applies wins
   and is the whole classpath, nothing merges: an explicit classpath, then the
-  :jolt-openldk/classpath key of deps.edn, then the jars (and class files) in
-  the project's jvm/ folder, then \".\"."
+  :jolt-openldk/classpath or :jolt-openldk/deps key of deps.edn (either one,
+  with the jars of the coordinates first), then the jars (and class files) in
+  the project's jvm/ folder, then \".\". Resolving :jolt-openldk/deps can
+  download jars and can throw jolt's resolution error."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [net.b12n.jolt.openldk.maven :as maven]))
 
 (defn read-deps
   "The parsed deps.edn under `root`, or nil when there is none. A file that
@@ -63,7 +66,11 @@
   seq of strings. Returns {:classpath \"a:b\" :entries [...] :source s}, where
   s is :explicit, :deps-edn, :jvm-dir or :default. Explicit entries are kept as
   given. Relative entries from deps.edn are resolved against `root`. A present
-  :jolt-openldk/classpath wins even when empty, and must be a vector."
+  :jolt-openldk/classpath wins even when empty, and must be a vector. A
+  non-nil :jolt-openldk/deps also selects deps.edn: its coordinate jars come
+  first, then the classpath entries, and the result gains :libs (lib to
+  resolved coordinate). Resolving coordinates can download jars and can throw
+  jolt's resolution error. An explicit classpath never resolves coordinates."
   [root explicit]
   (if (some? explicit)
     (let [entries (explicit-entries explicit)]
@@ -73,14 +80,25 @@
     (let [root (str root)
           deps (read-deps root)]
       (cond
-        (contains? deps :jolt-openldk/classpath)
-        (let [v (:jolt-openldk/classpath deps)]
-          (when-not (vector? v)
+        (or (contains? deps :jolt-openldk/classpath)
+            (some? (:jolt-openldk/deps deps)))
+        (let [cp? (contains? deps :jolt-openldk/classpath)
+              v (:jolt-openldk/classpath deps)
+              coords (:jolt-openldk/deps deps)]
+          (when (and cp? (not (vector? v)))
             (throw (ex-info (str ":jolt-openldk/classpath in " root "/deps.edn must be a vector of paths, got "
                                  (if (nil? v) "nil" (.getName (class v))))
                             {:key :jolt-openldk/classpath :value v})))
-          (let [entries (mapv (fn [e] (absolute root e)) v)]
-            {:classpath (join entries) :entries entries :source :deps-edn}))
+          (when (some? coords)
+            (try (maven/validate-deps coords)
+                 (catch clojure.lang.ExceptionInfo e
+                   (throw (ex-info (str/replace-first (ex-message e) "in deps.edn" (str "in " root "/deps.edn"))
+                                   (ex-data e) e)))))
+          (let [resolved (when (some? coords) (maven/resolve-jars root coords))
+                entries (into (vec (:jars resolved))
+                              (map (fn [e] (absolute root e)) v))]
+            (cond-> {:classpath (join entries) :entries entries :source :deps-edn}
+              (some? coords) (assoc :libs (:libs resolved)))))
 
         :else
         (let [entries (jvm-dir-entries root)]

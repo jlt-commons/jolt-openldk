@@ -171,7 +171,10 @@
 (defn project-classpath
   "What `init!` would use for `opts` from the current directory: a map of
   :classpath (a colon string), :entries and :source (:explicit, :deps-edn,
-  :jvm-dir or :default). See net.b12n.jolt.openldk.project/resolve-classpath."
+  :jvm-dir or :default), plus :libs when deps.edn has :jolt-openldk/deps. That
+  key's coordinate jars come first on the classpath, so this call can download
+  jars and can throw jolt's resolution error. See
+  net.b12n.jolt.openldk.project/resolve-classpath."
   ([] (project-classpath {}))
   ([opts] (project/resolve-classpath (System/getProperty "user.dir") (:classpath opts))))
 
@@ -284,7 +287,8 @@
   opts: :classpath (a string, or a seq of directories and jars, all of which
   must exist), :home (the JOLT_OPENLDK_HOME to use). Without :classpath, the
   first source that applies is the whole classpath: a :jolt-openldk/classpath
-  key in deps.edn that is present (even if empty), else jvm/ when it holds
+  key in deps.edn that is present (even if empty), or a :jolt-openldk/deps map
+  of Maven coordinates whose jars go first (this can download them), else jvm/ when it holds
   top-level jars or class files anywhere under it, else \".\". Nothing merges, and relative deps.edn
   entries resolve against the current directory. OpenLDK reads the JDK's
   class library at run time, so JAVA_HOME must name a JDK 25."
