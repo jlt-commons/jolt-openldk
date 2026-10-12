@@ -46,12 +46,16 @@
 (defn build
   "The manifest stored beside a baked core. `:fingerprint`, when given, is the
   classpath's fingerprint taken earlier (before the bake) and is recorded as is;
-  otherwise it is taken now from `entries`."
-  [{:keys [entries warm dist-manifest counts] fp :fingerprint}]
-  {:classpath-entries (or fp (fingerprint entries))
+  otherwise it is taken now from `entries`. `:classpath`, when given, is the
+  classpath string exactly as the core was baked for, recorded as `:classpath`
+  because the core accepts only that spelling."
+  [{:keys [entries warm dist-manifest counts classpath] fp :fingerprint}]
+  (cond->
+   {:classpath-entries (or fp (fingerprint entries))
    :warm (vec warm)
    :shared-build (shared-build dist-manifest)
-   :counts counts})
+    :counts counts}
+    classpath (assoc :classpath classpath)))
 
 (defn- entry-problems [b c]
   (let [p (:path b)]
@@ -71,15 +75,19 @@
 
 (defn problems
   "Human-readable reasons the baked manifest no longer matches `current`, a map
-  of :entries, :warm and :dist-manifest (build's input without :counts). Empty
-  when valid."
-  [baked {:keys [entries warm dist-manifest]}]
+  of :entries, :warm, :dist-manifest and :classpath (build's input without
+  :counts). The classpath string is compared as written, because the baked core
+  accepts only that spelling, while the entries are compared as canonical paths.
+  Empty when valid."
+  [baked {:keys [entries warm dist-manifest] cp :classpath}]
   (let [cur (fingerprint entries)
         bpaths (mapv :path (:classpath-entries baked))
         cpaths (mapv :path cur)
         bshared (:shared-build baked)
         cshared (shared-build dist-manifest)]
     (vec (concat
+          (when (and (:classpath baked) cp (not= (:classpath baked) cp))
+            [(str "classpath string changed: " (:classpath baked) " -> " cp)])
           (if (= bpaths cpaths)
             (mapcat entry-problems (:classpath-entries baked) cur)
             [(str "classpath changed: " (pr-str bpaths) " -> " (pr-str cpaths))])

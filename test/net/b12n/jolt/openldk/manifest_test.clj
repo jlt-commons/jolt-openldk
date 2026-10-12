@@ -118,6 +118,20 @@
       (is (= 1 (count ps)))
       (is (str/includes? (first ps) ":bridge")))))
 
+(deftest validate-refuses-a-respelled-classpath-string
+  (let [{:keys [dir jar]} (fixture)
+        respelled (str dir "/lib/../lib/a.jar")
+        baked (manifest/build (assoc (inputs [jar]) :classpath jar))]
+    (is (= [] (manifest/problems baked (assoc (inputs [jar]) :classpath jar))))
+    ;; Same canonical file, other spelling: the entries match, the string does not.
+    (let [ps (manifest/problems baked (assoc (inputs [respelled]) :classpath respelled))]
+      (is (= 1 (count ps)))
+      (is (str/includes? (first ps) "classpath string changed"))
+      (is (str/includes? (first ps) respelled)))
+    ;; A manifest without the string (or a caller without one) skips the check.
+    (is (= [] (manifest/problems (baked-of [jar]) (assoc (inputs [respelled]) :classpath respelled))))
+    (is (= [] (manifest/problems baked (inputs [respelled]))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.manifest-test)]
     (shutdown-agents)

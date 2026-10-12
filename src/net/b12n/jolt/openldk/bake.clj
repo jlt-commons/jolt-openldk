@@ -77,7 +77,7 @@
               (when-not (.renameTo (io/file core-tmp) (io/file core))
                 (fail (str "could not move " core-tmp " to " core) {:core core}))
               (spit counts-file (pr-str counts))
-              (spit manifest-file (pr-str (manifest/build {:fingerprint before :entries entries
+              (spit manifest-file (pr-str (manifest/build {:fingerprint before :entries entries :classpath classpath
                                                            :warm warm :dist-manifest dist-manifest
                                                            :counts counts})))
               counts))
