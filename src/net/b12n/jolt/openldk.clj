@@ -285,7 +285,7 @@
   must exist), :home (the JOLT_OPENLDK_HOME to use). Without :classpath, the
   first source that applies is the whole classpath: a :jolt-openldk/classpath
   key in deps.edn that is present (even if empty), else jvm/ when it holds
-  jars or class files, else \".\". Nothing merges, and relative deps.edn
+  top-level jars or class files anywhere under it, else \".\". Nothing merges, and relative deps.edn
   entries resolve against the current directory. OpenLDK reads the JDK's
   class library at run time, so JAVA_HOME must name a JDK 25."
   ([] (init! {}))

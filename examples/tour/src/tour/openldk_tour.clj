@@ -10,8 +10,9 @@
 (defn -main [& _]
   (let [t0 (System/nanoTime)]
     (ldk/init!)
-    (println (format "OpenLDK up in %d ms (SBCL core, JDK class library from JAVA_HOME, classpath from %s)"
+    (println (format "OpenLDK up in %d ms (core %s, JDK class library from JAVA_HOME, classpath from %s)"
                      (quot (- (System/nanoTime) t0) 1000000)
+                     (:core (ldk/status))
                      (name (:source (ldk/project-classpath)))))
 
     (println "\nthe JDK, statics")

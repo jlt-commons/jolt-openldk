@@ -686,7 +686,9 @@ a reply ever holds."
 (defun %ldk-warm-invoke ()
   "Compile OpenLDK's java.lang.invoke machinery now, so no later method pays for
 it. The first invokedynamic (any string + or lambda) otherwise loads about 38
-JDK classes and compiles about 145 JDK methods, roughly 650 ms, once per process."
+JDK classes and compiles about 145 JDK methods, roughly 650 ms, once per process.
+A method with a lambda still pays OpenLDK's lambda metafactory at run time on its
+first call (about 110 ms measured on 2026-10-12), which this does not touch."
   (classload "java/lang/invoke/MethodType")
   (|java/lang/invoke/MethodType.fromMethodDescriptorString(Ljava/lang/String;Ljava/lang/ClassLoader;)|
    (jstring "(J)Ljava/lang/String;") nil)
