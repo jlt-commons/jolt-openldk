@@ -5,7 +5,8 @@
   tests need no build. The last one reads the seeded repository that `bb test`
   puts under target/test-m2 and points JOLT_MAVEN_REPOSITORY at."
   (:require [clojure.test :refer [deftest is run-tests]]
-            [net.b12n.jolt.openldk.maven :as maven]))
+            [net.b12n.jolt.openldk.maven :as maven]
+            [net.b12n.jolt.openldk.test-m2 :as test-m2]))
 
 (deftest validate-accepts-nil-and-good-maps
   (doseq [v [nil {} '{net.b12n.test/fixture {:mvn/version "1.0"}}]]
@@ -67,14 +68,23 @@
                nil (catch Exception e e))]
     (is (identical? boom e))))
 
+(deftest resolve-without-jolt-deps-var
+  (let [e (with-redefs [requiring-resolve (fn [_] nil)]
+            (try (maven/resolve-jars "/r" '{a/b {:mvn/version "1"}})
+                 nil (catch Exception e e)))]
+    (is (some? e))
+    (is (= "jolt-openldk: :jolt-openldk/deps needs jolt.deps/resolve-deps, which this jolt doesn't have. Use jolt 0.8.19 or later."
+           (ex-message e)))
+    (is (= {:key :jolt-openldk/deps} (ex-data e)))))
+
 (deftest resolve-real-seeded-repo
   (let [r (maven/resolve-jars "." '{net.b12n.test/fixture {:mvn/version "1.0"}})]
-    (is (= [(str (System/getenv "JOLT_MAVEN_REPOSITORY")
-                 "/net/b12n/test/fixture/1.0/fixture-1.0.jar")]
+    (is (= [(test-m2/seeded-jar "1.0")]
            (:jars r)))
     (is (= '{net.b12n.test/fixture {:mvn/version "1.0"}} (:libs r)))))
 
 (defn -main [& _]
+  (test-m2/require-seeded!)
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.maven-test)]
     (shutdown-agents)
     (when (pos? (+ fail error)) (System/exit 1))))

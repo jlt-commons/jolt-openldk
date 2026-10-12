@@ -35,7 +35,13 @@
   {:jars [absolute-path ...] :libs {lib coord}} with `resolve-fn`, called as
   (resolve-fn deps root). It defaults to jolt.deps/resolve-deps. An empty map
   never calls it."
-  ([root deps] (resolve-jars root deps (requiring-resolve 'jolt.deps/resolve-deps)))
+  ([root deps]
+   (if (empty? deps)
+     {:jars [] :libs {}}
+     (resolve-jars root deps
+                   (or (requiring-resolve 'jolt.deps/resolve-deps)
+                       (throw (ex-info "jolt-openldk: :jolt-openldk/deps needs jolt.deps/resolve-deps, which this jolt doesn't have. Use jolt 0.8.19 or later."
+                                       {:key :jolt-openldk/deps}))))))
   ([root deps resolve-fn]
    (if (empty? deps)
      {:jars [] :libs {}}

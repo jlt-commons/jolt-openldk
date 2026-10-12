@@ -10,7 +10,8 @@
             [clojure.test :refer [deftest is run-tests]]
             [net.b12n.jolt.openldk :as ldk]
             [net.b12n.jolt.openldk.bake :as bake]
-            [net.b12n.jolt.openldk.manifest :as manifest]))
+            [net.b12n.jolt.openldk.manifest :as manifest]
+            [net.b12n.jolt.openldk.test-m2 :as test-m2]))
 
 (def have-build?
   (let [dist (ldk/dist-dir)]
@@ -283,6 +284,7 @@
        (finally (delete-tree tmp))))))
 
 (defn -main [& _]
+  (test-m2/require-seeded!)
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.bake-test)]
     (shutdown-agents)
     (when (pos? (+ fail error)) (System/exit 1))))

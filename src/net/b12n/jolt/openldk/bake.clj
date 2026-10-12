@@ -49,7 +49,7 @@
         dist (ldk/dist-dir {:home home})
         {:keys [classpath entries source]} (project/resolve-classpath root nil)]
     (when (#{:default :explicit} source)
-      (fail (str "nothing to bake in " root ": declare :jolt-openldk/classpath in deps.edn or add jars to jvm/")
+      (fail (str "nothing to bake in " root ": declare :jolt-openldk/deps or :jolt-openldk/classpath in deps.edn, or add jars to jvm/")
             {:root root :source source}))
     (when-let [missing (seq (ldk/missing-classpath-entries classpath))]
       (fail (str "classpath entries do not exist: " (str/join ", " missing))
