@@ -49,6 +49,12 @@
     (is (= ["a.B"] (:warm b)))
     (is (= {:methods 1} (:counts b)))))
 
+(deftest build-records-a-precomputed-fingerprint
+  (let [{:keys [jar]} (fixture)
+        fp [{:path "/earlier" :size 1 :crc32 2}]]
+    (is (= fp (:classpath-entries (manifest/build (assoc (inputs [jar]) :fingerprint fp)))))
+    (is (= (manifest/fingerprint [jar]) (:classpath-entries (baked-of [jar]))))))
+
 (deftest validate-ok-when-nothing-changed
   (let [{:keys [dir jar cls]} (fixture)
         es [jar cls (str dir "/nope")]]

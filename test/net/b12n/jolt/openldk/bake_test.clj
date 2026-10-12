@@ -8,7 +8,9 @@
             [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
             [clojure.test :refer [deftest is run-tests]]
-            [net.b12n.jolt.openldk :as ldk]))
+            [net.b12n.jolt.openldk :as ldk]
+            [net.b12n.jolt.openldk.bake :as bake]
+            [net.b12n.jolt.openldk.manifest :as manifest]))
 
 (def have-build?
   (let [dist (ldk/dist-dir)]
@@ -94,6 +96,47 @@
        (is (not (str/includes? msg "started")))
        (is (str/includes? msg "/target/test-classes") msg)
        (is (str/includes? msg (str fixture "/src")) msg)))))
+
+(defn- copy-fixture-with-warm [warm]
+  (let [tmp (doto (java.io.File/createTempFile "warm" "") .delete .mkdirs)]
+    (spit (io/file tmp "deps.edn")
+          (pr-str {:deps {'net.b12n/jolt-openldk {:local/root (.getAbsolutePath (io/file "."))}}
+                   :jolt-openldk/classpath [(.getAbsolutePath (io/file "target/test-classes"))]
+                   :jolt-openldk/warm warm}))
+    tmp))
+
+(deftest a-failed-bake-leaves-nothing-behind
+  (when-built
+   (let [tmp (copy-fixture-with-warm ["java.time.LocalDate"])]
+     (try
+       (is (zero? (:exit (bake! (str tmp)))) "a good bake first")
+       (is (.exists (io/file tmp "target/openldk/openldk.core")))
+       (spit (io/file tmp "deps.edn")
+             (pr-str {:deps {'net.b12n/jolt-openldk {:local/root (.getAbsolutePath (io/file "."))}}
+                      :jolt-openldk/classpath [(.getAbsolutePath (io/file "target/test-classes"))]
+                      :jolt-openldk/warm ["java.time.NoSuch"]}))
+       (let [r (bake! (str tmp))
+             left (set (.list (io/file tmp "target/openldk")))]
+         (is (pos? (:exit r)))
+         (is (not (contains? left "openldk.core")) (pr-str left))
+         (is (not (contains? left "bake-manifest.edn")) (pr-str left))
+         (is (not-any? #(str/ends-with? % ".tmp") left) (pr-str left)))
+       (finally (delete-tree tmp))))))
+
+(deftest a-classpath-that-changed-during-the-bake-is-refused
+  ;; Driving a real mid-bake change is impractical, so this tests the check
+  ;; bake! makes between its two fingerprints.
+  (let [tmp (doto (java.io.File/createTempFile "fpr" "") .delete .mkdirs)
+        cls (io/file tmp "C.class")
+        entries [(str tmp)]]
+    (try
+      (spit cls "one")
+      (let [before (manifest/fingerprint entries)]
+        (is (nil? (bake/ensure-unchanged! before (manifest/fingerprint entries))))
+        (spit cls "two")
+        (is (thrown-with-msg? Exception (re-pattern "classpath changed during the bake")
+                              (bake/ensure-unchanged! before (manifest/fingerprint entries)))))
+      (finally (delete-tree tmp)))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.bake-test)]
