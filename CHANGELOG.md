@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The shared core warms OpenLDK's `invokedynamic` path while it is built, so the
+  first method with a string `+` or a lambda no longer costs about 650 ms.
+  The pre-dump cleanup is now `%ldk-prepare-dump` and also destroys
+  OpenLDK's watchdog thread and resets its debug flags.
+
 - `init!` finds the project's classpath when none is passed
   (jlt-commons/jolt-openldk#3). It takes the first that applies of an explicit
   `:classpath`, a `:jolt-openldk/classpath` vector in `deps.edn`, and the jars

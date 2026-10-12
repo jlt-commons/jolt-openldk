@@ -675,15 +675,45 @@ a reply ever holds."
                                           (serious-condition () "unprintable condition"))))))
           (serious-condition () -1))))))
 
-(defun make-jolt-openldk-core (path)
-  "Dump a library core: OpenLDK warmed as its own make-image warms it, no
-toplevel, and LDK_ENTRY exported for initialize_lisp to publish."
-  (initialize)
+(defun %ldk-warm-invoke ()
+  "Compile OpenLDK's java.lang.invoke machinery now, so no later method pays for
+it. The first invokedynamic (any string + or lambda) otherwise loads about 38
+JDK classes and compiles about 145 JDK methods, roughly 650 ms, once per process."
+  (classload "java/lang/invoke/MethodType")
+  (|java/lang/invoke/MethodType.fromMethodDescriptorString(Ljava/lang/String;Ljava/lang/ClassLoader;)|
+   (jstring "(J)Ljava/lang/String;") nil)
+  ;; same descriptor again: the interned-MethodType lookup (MethodType.equals etc.)
+  (|java/lang/invoke/MethodType.fromMethodDescriptorString(Ljava/lang/String;Ljava/lang/ClassLoader;)|
+   (jstring "(J)Ljava/lang/String;") nil)
+  (classload "java/lang/invoke/StringConcatFactory")
+  (classload "java/lang/invoke/LambdaMetafactory")
+  (classload "java/lang/invoke/MethodHandles$Lookup"))
+
+(defun %ldk-prepare-dump ()
+  "Reset the runtime state that must not survive into a dumped core: debug
+flags, the VM start time, monitors, the thread map, and every thread but this
+one (save-lisp-and-die refuses to save with others running, including the
+watchdog %main-runtime-setup starts)."
+  ;; %parse-ldk-debug-flags only ever sets flags, and a dumped T would print
+  ;; ; LOADING/; COMPILING in every later run.
+  (setf *debug-codegen* nil *debug-load* nil *debug-compile* nil *debug-slynk* nil
+        *debug-trace* nil *debug-trace-args* nil *debug-bytecode* nil
+        *debug-exceptions* nil *debug-x* nil *debug-unmuffle* nil *debug-propagation* nil)
+  ;; %main-runtime-setup stamps this only when NIL.
+  (setf *vm-start-time-millis* nil)
   (clrhash *monitors*)
   (clrhash *lisp-to-java-threads*)
   (setf *current-thread* nil)
   (loop for thread in (bt:all-threads)
-        when (and (not (eq thread (bt:current-thread)))
-                  (search "Java-Thread" (bt:thread-name thread)))
+        unless (eq thread (bt:current-thread))
           do (bt:destroy-thread thread))
+  (sleep 0.2))
+
+(defun make-jolt-openldk-core (path)
+  "Dump a library core: OpenLDK warmed as its own make-image warms it, plus the
+invokedynamic path, no toplevel, and LDK_ENTRY exported for initialize_lisp
+to publish."
+  (initialize)
+  (%ldk-warm-invoke)
+  (%ldk-prepare-dump)
   (sb-ext:save-lisp-and-die path :callable-exports '(ldk_entry)))
