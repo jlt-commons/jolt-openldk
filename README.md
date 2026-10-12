@@ -131,8 +131,9 @@ With none of these, the classpath is `.`.
 
 ```
 jolt-openldk: cannot resolve :jolt-openldk/deps: Error building classpath. The following artifacts could not be resolved:
-  no.such/lib 1.0 (not found in any repository, naming the two it tried)
 ```
+
+Jolt then lists each coordinate it couldn't find, with the repositories it tried.
 
 Relative entries resolve against the directory jolt was started from, not against wherever the `deps.edn` file lives, so start the process in the project root. `(ldk/project-classpath)` returns what `init!` would use, with the `:source` it came from, the `:entries` in order and, when coordinates were resolved, the `:libs` map, which helps when the classpath isn't the one you expected. For the `deps.edn` above it returns `:source :deps-edn`, with the codec jar at `~/.m2/repository/commons-codec/commons-codec/1.17.1/commons-codec-1.17.1.jar` as the first entry and `target/classes` after it.
 
@@ -290,6 +291,7 @@ On a network that inspects TLS, Zscaler for instance, ocicl can't fetch from ghc
 bb test     # wire, project and maven tests always (the project tests need no build); the OpenLDK tests skip without a build
 bb gates    # lint, then all tests with JOLT_OPENLDK_REQUIRE=1 so a missing build fails, then the tour
 bb linux    # the same build, tests and tour on Linux in Docker; slow, so not part of gates
+```
 
 The project, maven and bake test namespaces resolve coordinates against a local Maven repository that `bb test` and `bb gates` seed at `target/test-m2`. To run one of them by hand, set the variable yourself, or the test stops and says so:
 
@@ -298,7 +300,6 @@ JOLT_MAVEN_REPOSITORY=$PWD/target/test-m2 jolt -A:test -m net.b12n.jolt.openldk.
 ```
 
 The missing-coordinate test in the bake tests contacts Clojars and Maven Central.
-```
 
 Last run, 2026-10-12: wire tests 11 tests and 65 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 18 tests and 151 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, all passing.
 
