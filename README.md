@@ -263,7 +263,7 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 | Platform | Status |
 |---|---|
 | macOS arm64 | Verified. `bb gates` locally, and the `macos-arm64` CI job. |
-| Linux x86-64 | Verified. The `linux-x86_64` CI job, on GitHub's Ubuntu runner: `bridge/build.sh`, every test with skipping disallowed, and the tour. |
+| Linux x86-64 | Verified. The `linux-x86_64` CI job, on GitHub's Ubuntu 24.04 runner: `bridge/build.sh`, every test with skipping disallowed, and the tour. |
 | Linux arm64 | Verified. The `linux-arm64` CI job, and `bb linux` on Apple silicon, both through `linux/Dockerfile` on Ubuntu 26.04. |
 | macOS x86-64, Windows | Not attempted. |
 

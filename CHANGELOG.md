@@ -5,6 +5,8 @@
 - CI uses the Node 24 releases of `actions/checkout` (v7), `actions/setup-java`
   (v6) and `actions/cache` (v6). GitHub had started warning that the v4
   releases target the deprecated Node 20.
+  The lint and Linux x86-64 jobs are pinned to `ubuntu-24.04`, so GitHub's
+  move of `ubuntu-latest` to Ubuntu 26 doesn't change them unannounced.
 
 - Baked cores (jlt-commons/jolt-openldk#3). `bb bake`, or
   `jolt -M -m net.b12n.jolt.openldk.bake` in a project root, translates the
