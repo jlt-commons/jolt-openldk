@@ -85,13 +85,18 @@
    :task (do (println "\n== lint ==") (run 'lint)
              (println "\n== test ==")
              (javac! "target/test-classes" "test/java/Fixture.java")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
-             (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.manifest-test")
-             (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
-                    "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
-             (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
-                    "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
-             (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
-                    "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test")
+             (seed-m2!)
+             (let [m2 (str (fs/absolutize "target/test-m2"))]
+               (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.wire-test")
+               (shell {:extra-env {"JOLT_MAVEN_REPOSITORY" m2}}
+                      "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
+               (shell {:extra-env {"JOLT_MAVEN_REPOSITORY" m2}}
+                      "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.maven-test")
+               (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.manifest-test")
+               (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
+                      "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
+               (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
+                      "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
+               (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1" "JOLT_MAVEN_REPOSITORY" m2}}
+                      "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test"))
              (println "\n== tour ==") (run 'tour))}}}
