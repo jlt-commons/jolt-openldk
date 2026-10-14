@@ -35,6 +35,99 @@
 
 (in-package :openldk)
 
+;;; --- fixes carried for OpenLDK -------------------------------------------
+;;; Two OpenLDK functions replaced whole, until the pinned OpenLDK has the
+;;; fixes. When the pin moves, compare each with its original (named below) and
+;;; drop it once upstream matches.
+
+;; From src/openldk.lisp. Upstream interns an instance method's stub in the
+;; class loader's package, but instance methods dispatch on a generic function
+;; in :openldk (see %build-method-definition). For a class from a user loader,
+;; which is every class on the classpath jolt-openldk sets, the stub went onto
+;; an unrelated generic function and the lazy compile stub stayed. Its next
+;; call looped forever: %compile-method returns at once for a method already
+;; marked :done, and the stub then invokes itself again.
+(defun %install-jit-error-stub (class method method-key)
+  "Install a function that signals on invocation, so a failed JIT compile
+doesn't leave a self-recursing compilation stub behind.  Uses plain Lisp
+errors (not Java exceptions) to avoid triggering further class loading
+during error handling."
+  (if (static-p method)
+      (let ((fn-symbol (intern (%method-fn-name class method)
+                               (%class-loader-package class))))
+        (when (fboundp fn-symbol)
+          (setf (symbol-function fn-symbol)
+                (lambda (&rest args)
+                  (declare (ignore args))
+                  (internal-error "JIT compilation failed for ~A" method-key)))))
+      ;; Instance method: replace the lazy stub's method on the :openldk
+      ;; generic function with one that throws. CL:EVAL, not %eval, so the JIT
+      ;; isn't re-entered.
+      (let* ((fn-symbol (intern (%method-fn-name class method) :openldk))
+             (class-sym (intern (slot-value class 'name)
+                                (%class-specializer-package class)))
+             (this-sym (intern "this" :openldk))
+             (n-params (count-parameters (slot-value method 'descriptor)))
+             (param-names (loop for i from 1 upto n-params
+                                collect (gensym (format nil "P~A-" i)))))
+        (when (find-class class-sym nil)
+          (eval `(defmethod ,fn-symbol ((,this-sym ,class-sym) ,@param-names)
+                   (declare (ignore ,this-sym ,@param-names))
+                   (internal-error "JIT compilation failed for ~A" ,method-key)))))))
+
+(defun %jmod-zip-offset (raw)
+  "Where the zip archive inside the jmod RAW counts its offsets from: 4 when
+from just after the JM header, as OpenJDK's jmods do, 0 when from the start of
+the file, as 30 of the 84 jmods in GraalVM CE 25.0.1 do. Tells them apart by
+where the central directory's signature (PK, 1, 2) is. Anything it doesn't
+recognise, a zip64 archive included, gets 4, upstream's assumption."
+  (let* ((len (file-length raw))
+         (tail-len (min len 65557))
+         (tail (make-array tail-len :element-type '(unsigned-byte 8))))
+    (file-position raw (- len tail-len))
+    (read-sequence tail raw)
+    (flet ((u32 (i)
+             (logior (aref tail i) (ash (aref tail (+ i 1)) 8)
+                     (ash (aref tail (+ i 2)) 16) (ash (aref tail (+ i 3)) 24)))
+           (central-directory-at-p (pos)
+             (and (<= (+ pos 4) len)
+                  (let ((sig (make-array 4 :element-type '(unsigned-byte 8))))
+                    (file-position raw pos)
+                    (read-sequence sig raw)
+                    (equalp sig #(#x50 #x4B 1 2))))))
+      (let ((eocd (loop for i from (- tail-len 22) downto 0
+                        when (and (= (aref tail i) #x50) (= (aref tail (+ i 1)) #x4B)
+                                  (= (aref tail (+ i 2)) 5) (= (aref tail (+ i 3)) 6))
+                          return i)))
+        (prog1
+            (let ((cd (and eocd (u32 (+ eocd 16)))))
+              (cond ((or (null cd) (= cd #xFFFFFFFF)) 4)
+                    ((central-directory-at-p (+ cd 4)) 4)
+                    ((central-directory-at-p cd) 0)
+                    (t 4)))
+          (file-position raw 4))))))
+
+;; From src/classpath.lisp. Upstream always skips 4 bytes, so a jmod laid out
+;; the GraalVM way is read 4 bytes past its central directory and fails zip's
+;; signature assertion. OpenLDK reads the whole JDK from jmods/ when there is
+;; one, so on such a JDK that broke classes in those modules and every lookup
+;; of a class that isn't anywhere.
+(defun open-jmod-zipfile (pathname)
+  "Open a JMOD file as a zipfile, skipping the 4-byte JMOD magic header."
+  (let ((raw (open pathname :element-type '(unsigned-byte 8))))
+    ;; Verify JMOD magic: JM\1\0
+    (let ((magic (make-array 4 :element-type '(unsigned-byte 8))))
+      (read-sequence magic raw)
+      (unless (and (= (aref magic 0) #x4A) ; J
+                   (= (aref magic 1) #x4D) ; M
+                   (= (aref magic 2) #x01)
+                   (= (aref magic 3) #x00))
+        (close raw)
+        (error "Not a valid JMOD file: ~A" pathname)))
+    (let ((wrapper (make-instance 'jmod-offset-stream :inner raw
+                                                      :offset (%jmod-zip-offset raw))))
+      (zip::open-zipfile-from-stream wrapper))))
+
 ;;; --- descriptors ---------------------------------------------------------
 
 (defun %ldk-field-end (desc start)
