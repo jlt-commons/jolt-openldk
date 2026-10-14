@@ -156,3 +156,32 @@ OpenLDK, so no String is made the old way.
 The same reproduction found one more thing, not looked into: an MD5
 `MessageDigest` call made the run exit on both `master` and the fixed branch.
 
+## 6. On macOS, NativeLibraries.load is undefined
+
+Found 2026-10-14 against `701609f`, which is also `master` that day, chasing
+the MD5 exit noted under 5, and sent upstream with a fix and a DejaGnu test as
+[#16](https://github.com/atgreen/openldk/pull/16), after re-checking `master`
+and searching the tracker for duplicates.
+
+`MessageDigest.getInstance` initializes `java.security.Security`, which reads
+its master file through `Path.of`. `FileSystems.getDefault()` initializes
+`UnixNativeDispatcher`, whose static initializer calls
+`BootLoader.loadLibrary("nio")`. `NativeLibraries.loadLibrary(Class, File)`
+skips a library file that isn't present only when
+`ClassLoaderHelper.loadLibraryOnlyIfPresent()` is true, and on macOS 11 and
+later it is false (dyld's shared cache), so the JDK calls the native `load`,
+which OpenLDK didn't define. Linux checks for the file first and never calls
+it, going by the JDK's source; not run on Linux.
+
+OpenLDK's natives are Lisp, so there is no library to load. `bridge/bridge.lisp`
+defines `load` to return false, which the JDK treats as an absent library that
+`BootLoader.loadLibrary` ignores. With it, MD5, SHA-256, `Path.of`,
+`Files.exists`, `readString`, `readAllBytes` and `writeString` give the JVM's
+results. On OpenLDK's own regression gate the fix turns `aaa/h005.java` and
+`gcj/md5test.java` from FAIL to PASS (two of the three failures this machine
+showed for #14 and #15), with nothing going the other way.
+
+Seen in the same work, not looked into: `Files.list` throws
+`ArrayIndexOutOfBoundsException: 0`, and OpenLDK opens zlib as `libz.so.1`, a
+name macOS doesn't have (`aaa/ni.java`).
+

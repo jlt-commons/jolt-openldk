@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fixed, on macOS: the first use of `java.nio.file` (`Path.of`, `Files`), and
+  `MessageDigest.getInstance`, failed with `The function
+  OPENLDK::|jdk/internal/loader/NativeLibraries.load(...)| is undefined`.
+  macOS's JDK loads a library without first checking for its file, and
+  OpenLDK, whose natives are Lisp, had no `load` to answer it. `bridge/bridge.lisp`
+  now defines it to report the library as not loaded, which the JDK treats as
+  absent, as on Linux. Sent upstream as atgreen/openldk#16.
+
 - Fixed: a string passed into Java with any character from U+0080 up came out
   of Java's UTF-8 encoder as its Latin-1 bytes (`"hé"` as `[104 -23]`, not
   `[104 -61 -87]`), and wasn't equal to the same text built in Java. OpenLDK
