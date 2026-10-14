@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Primitive arrays cross as raw memory instead of text, in both directions.
+  `new-array`, `array->vec` and a vector passed for a primitive array
+  parameter all take the new path without any change to the calling code, and
+  give the same results and the same error messages. A million `int`s now take
+  130 to 150 ms to go in from a vector and 64 to 100 ms to read back with
+  `array->vec`, against 0.7 s and 3.4 s before (`bb bench-arrays`, which is
+  new). A vector mixing kinds, such as `[1 2.5]`, or holding a nil still
+  crosses as text.
+- `array->primitive` reads a numeric Java array into a jolt typed array: a
+  `byte[]` into a `byte-array`, an `int[]` into an `int-array`, and so on. A
+  million `int`s take about 9 ms. `char[]` and `boolean[]` are refused, so
+  read those with `array->vec`.
+- A jolt typed array (`int-array`, `byte-array`, `double-array` ...) is
+  accepted wherever a primitive array is, as `new-array`'s contents and for a
+  primitive array parameter, and converts like a vector of its elements.
+  Anywhere else it is refused with a message saying where it can go.
+- Fixed: a primitive array that OpenLDK built through `Array.newInstance`
+  holds nils, which Java code reads as zeros. `array->vec` and
+  `array->primitive` now read them as zeros too.
+
 - Fixed: calling an instance method that OpenLDK fails to compile, one that
   uses `jsr` for instance, hung the process at full CPU instead of throwing.
   The stub meant to throw went onto the wrong generic function, and the
