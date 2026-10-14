@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fixed: a string passed into Java with any character from U+0080 up came out
+  of Java's UTF-8 encoder as its Latin-1 bytes (`"hé"` as `[104 -23]`, not
+  `[104 -61 -87]`), and wasn't equal to the same text built in Java. OpenLDK
+  stored a string's bytes unsigned where Java's `byte[]` is signed, and the
+  JDK's encoder skips work when it sees no negative byte. `bridge/bridge.lisp`
+  now replaces OpenLDK's `%string-value-bytes` and the String `print-object`
+  with corrected copies, until the pin moves to an OpenLDK with the fix
+  (sent upstream as atgreen/openldk#15).
+
 - Primitive arrays cross as raw memory instead of text, in both directions.
   `new-array`, `array->vec` and a vector passed for a primitive array
   parameter all take the new path without any change to the calling code, and
