@@ -258,14 +258,14 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 
 ## What doesn't work yet
 
-- **Only direct dependencies.** A coordinate under `:jolt-openldk/deps` brings in its own jar and nothing else, because jolt doesn't read the POMs of Java-only jars. List the library's dependencies as coordinates too. `org.apache.httpcomponents/httpclient` 4.5.14 needs `httpcore` 4.4.16, `commons-logging` 1.2 and `commons-codec` 1.11, for example. A bake's summary lists the classes it skipped, which is where a missing dependency shows up. `:exclusions`, `:mvn/repos` and classifiers aren't supported.
+- **Only direct dependencies.** A coordinate under `:jolt-openldk/deps` brings in its own jar and nothing else, because jolt doesn't read the POMs of Java-only jars. List the library's dependencies as coordinates too. `org.apache.httpcomponents/httpclient` 4.5.14 needs `httpcore` 4.4.16, `commons-logging` 1.2 and `commons-codec` 1.11, for example. A bake's summary lists the classes it skipped, which is where a missing dependency shows up. Without a bake it shows up on the first call that needs it, as an error naming the missing class: httpclient's `URIBuilder` without httpcore throws `The function OPENLDK::|%clinit-org/apache/http/Consts| is undefined`. `:exclusions`, `:mvn/repos` and classifiers aren't supported.
 - **Bulk arrays.** Every element crosses as text. Measured with 100,000 elements, a `byte[]` or an `int[]` took about 60 ms to build from a vector and 260 to 330 ms to read back across two runs, and came back equal. A million `int`s took 0.7 s in and 3.4 s out. Fine for configuration, slow for image data.
 - **Implementing a class.** `implement` takes interfaces only. Subclassing an abstract class from Clojure isn't supported.
 - **Wrapped callback exceptions.** The original Clojure throwable comes back only when the `RuntimeException` itself reaches your call. If Java wraps it in another exception first, you get the wrapper as an `ex-info`.
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
 - **JavaRef arguments aren't class-checked.** Scalars, strings and vectors are checked against the parameter type, but a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
-- **OpenLDK's own gaps.** It's a young runtime, and anything that fails here may well be OpenLDK rather than the bridge. Two string bugs found while building this were reported upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12) and fixed the next day in `701609f`, which this pins. `docs/openldk-upstream-notes.md` has the details.
+- **OpenLDK's own gaps.** It's a young runtime, and anything that fails here may well be OpenLDK rather than the bridge. Two string bugs found while building this were reported upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12) and fixed the next day in `701609f`, which this pins. Two more were found on 2026-10-14, and `bridge/bridge.lisp` carries fixes for both until the pin moves to an OpenLDK that has them. A method that failed to compile looped forever when it was an instance method, so a constructor reaching a class that couldn't be loaded hung the process instead of throwing. And a JDK whose jmods count zip offsets from the start of the file, as 30 of GraalVM CE 25.0.1's do, broke every class in them. `docs/openldk-upstream-notes.md` has the details.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
 ## Platforms
@@ -278,6 +278,8 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 | macOS x86-64, Windows | Not attempted. |
 
 Don't use `bb linux` with `JOLT_OPENLDK_LINUX_PLATFORM=linux/amd64` on Apple silicon. Under Docker's x86-64 emulation, compiling SBCL 2.6.9 stops in `src/code/irrat` with the cross-compiler's `Unimplemented.`, while the same build passes on real x86-64 hardware in CI. The emulator is at fault, not Linux.
+
+Any JDK 25 should do. CI uses Temurin 25, which ships `lib/modules` and no `jmods/`, and the core is built and tested locally against Oracle's OpenJDK 25.0.2. OpenLDK reads the class library from `jmods/` whenever a JDK has one, so a JDK that ships them takes a different path through OpenLDK. GraalVM CE 25.0.1 has been run too, and needed one of the fixes `bridge/bridge.lisp` carries.
 
 CI (`.github/workflows/ci.yml`) runs lint and the three platform jobs on every push to `main` and every pull request. Each runs `bridge/build.sh`, the tests with `JOLT_OPENLDK_REQUIRE=1` and the tour, with versions pinned and the SBCL build cached.
 
@@ -301,7 +303,9 @@ JOLT_MAVEN_REPOSITORY=$PWD/target/test-m2 jolt -A:test -m net.b12n.jolt.openldk.
 
 The missing-coordinate test in the bake tests contacts Clojars and Maven Central.
 
-Last run, 2026-10-12: wire tests 11 tests and 65 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 18 tests and 151 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, all passing.
+The patches tests check the two OpenLDK fixes in `bridge/bridge.lisp`, each in a jolt subprocess that a watchdog kills after two minutes, since one of them is about a call that never returned. The jmod check needs a JDK with `jmods/java.prefs.jmod` and skips without one, as on CI's Temurin.
+
+Last run, 2026-10-14: wire tests 11 tests and 65 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 18 tests and 151 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
 
 ## Licence
 

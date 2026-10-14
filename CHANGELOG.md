@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Fixed: a constructor or method reaching a class that couldn't be loaded,
+  such as httpclient's `URIBuilder` without httpcore, could hang the process
+  at full CPU instead of throwing. When OpenLDK failed to compile an instance
+  method, the stub meant to throw went onto the wrong generic function, and
+  the method's lazy compile stub then called itself forever.
+  `bridge/bridge.lisp` now replaces OpenLDK's `%install-jit-error-stub` with
+  a corrected copy, so the call throws "JIT compilation failed for ...".
+- Fixed: a JDK whose jmods count their zip offsets from the start of the file,
+  as 30 of the 84 in GraalVM CE 25.0.1 do, failed zip's signature assertion on
+  any class in those modules, and on any class that wasn't found at all, which
+  is what made the compile above fail on that JDK. `bridge/bridge.lisp`
+  replaces OpenLDK's `open-jmod-zipfile` with one that checks where each
+  jmod's central directory is.
+
 - Maven coordinates (jlt-commons/jolt-openldk#3). A project can name Java
   libraries under `:jolt-openldk/deps` in `deps.edn`, as a qualified symbol
   mapped to `{:mvn/version "..."}`, and `init!` resolves them to jars through
