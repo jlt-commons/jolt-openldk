@@ -265,7 +265,7 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
 - **JavaRef arguments aren't class-checked.** Scalars, strings and vectors are checked against the parameter type, but a JavaRef goes to any reference parameter, so passing the wrong class surfaces later as whatever error the Java code raises.
-- **OpenLDK's own gaps.** It's a young runtime, and anything that fails here may well be OpenLDK rather than the bridge. Two string bugs found while building this were reported upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12) and fixed the next day in `701609f`, which this pins. Two more were found on 2026-10-14, and `bridge/bridge.lisp` carries fixes for both until the pin moves to an OpenLDK that has them. A method that failed to compile looped forever when it was an instance method, so a constructor reaching a class that couldn't be loaded hung the process instead of throwing. And a JDK whose jmods count zip offsets from the start of the file, as 30 of GraalVM CE 25.0.1's do, broke every class in them. `docs/openldk-upstream-notes.md` has the details.
+- **OpenLDK's own gaps.** It's a young runtime, and anything that fails here may well be OpenLDK rather than the bridge. Two string bugs found while building this were reported upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12) and fixed the next day in `701609f`, which this pins. Two more were found on 2026-10-14, and `bridge/bridge.lisp` carries fixes for both until the pin moves to an OpenLDK that has them. Calling an instance method that OpenLDK failed to compile looped forever instead of throwing. And a JDK whose jmods count zip offsets from the start of the file, as 30 of GraalVM CE 25.0.1's do, failed any class lookup that reached one of them. Together they made a constructor that needed a missing class hang the process on that JDK. `docs/openldk-upstream-notes.md` has the details.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
 ## Platforms
@@ -273,7 +273,7 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 | Platform | Status |
 |---|---|
 | macOS arm64 | Verified. `bb gates` locally, and the `macos-arm64` CI job. |
-| Linux x86-64 | Verified. The `linux-x86_64` CI job, on GitHub's Ubuntu 24.04 runner: `bridge/build.sh`, every test with skipping disallowed, and the tour. |
+| Linux x86-64 | Verified. The `linux-x86_64` CI job, on GitHub's Ubuntu 24.04 runner: `bridge/build.sh`, every test with skipping disallowed (except the jmod check, which needs a JDK with `jmods/`), and the tour. |
 | Linux arm64 | Verified. The `linux-arm64` CI job, and `bb linux` on Apple silicon, both through `linux/Dockerfile` on Ubuntu 26.04. |
 | macOS x86-64, Windows | Not attempted. |
 
