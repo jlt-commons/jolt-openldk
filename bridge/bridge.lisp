@@ -208,6 +208,24 @@ byte[]."
     (sb-alien:load-shared-object #+darwin "libz.1.dylib" #-darwin "libz.so.1")
     (setf *zlib-loaded* t)))
 
+;; Missing from src/native/frames.lisp upstream: the native behind
+;; Clock.currentInstant, so Instant.now() signalled an undefined function on
+;; every platform. Date.toString reaches it too, through CLDR's GMT-format
+;; fallback, in a time zone with no display name (GMT+07:00, say). Answers as
+;; HotSpot does: nanoseconds from the given epoch offset to now, or -1 when the
+;; offset is 2^32 seconds or more away.
+(defun |jdk/internal/misc/VM.getNanoTimeAdjustment(J)| (offset-in-seconds)
+  (assert (eq org.shirakumo.precise-time:precise-time-units-per-second
+              1000000000))
+  (multiple-value-bind (universal-time nanoseconds)
+      (org.shirakumo.precise-time:get-precise-time)
+    (let ((diff (- (local-time:timestamp-to-unix
+                    (local-time:universal-to-timestamp universal-time))
+                   offset-in-seconds)))
+      (if (< (- (expt 2 32)) diff (expt 2 32))
+          (+ (* diff 1000000000) nanoseconds)
+          -1))))
+
 ;;; --- descriptors ---------------------------------------------------------
 
 (defun %ldk-field-end (desc start)

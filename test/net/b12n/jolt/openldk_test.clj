@@ -601,6 +601,16 @@
                        back (ldk/call gin "readAllBytes" "()[B")]
           (is (= (vec data) (ldk/array->vec back)) "a GZIP round trip"))))))
 
+(deftest instant-now-works
+  ;; Instant.now() reads the clock through VM.getNanoTimeAdjustment, a native
+  ;; OpenLDK didn't define. Date.toString reaches it too, in a time zone with
+  ;; no CLDR display name.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (ldk/with-ref [now (ldk/call-static "java.time.Instant" "now" "()Ljava/time/Instant;")]
+      (let [ms (ldk/call now "toEpochMilli" "()J")]
+        (is (< (abs (- ms (System/currentTimeMillis))) 5000) (str "Instant.now() gave " ms))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)
