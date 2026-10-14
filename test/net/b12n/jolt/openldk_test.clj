@@ -542,6 +542,21 @@
           (when-not (#{"Z" "C"} component)
             (is (= expected (vec (ldk/array->primitive a))) component)))))))
 
+(deftest strings-passed-in-are-java-strings
+  ;; A string crosses into Java as OpenLDK's jstring, whose bytes used to be
+  ;; unsigned where Java's byte[] is signed. JDK code depends on the sign, so
+  ;; UTF-8 came out as Latin-1 and equals failed against Java-built text.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (ldk/with-ref [s (ldk/new-object "java.lang.String" "(Ljava/lang/String;)V" "hé")
+                   utf8 (ldk/call s "getBytes" "(Ljava/lang/String;)[B" "UTF-8")
+                   built (ldk/new-object "java.lang.String" "([C)V" [\h \é])]
+      (is (= [104 -61 -87] (ldk/array->vec utf8)))
+      (is (true? (ldk/call built "equals" "(Ljava/lang/Object;)Z" "hé"))))
+    (ldk/with-ref [built (ldk/new-object "java.lang.String" "([C)V" [\a \日])]
+      (is (true? (ldk/call built "equals" "(Ljava/lang/Object;)Z" "a日")) "UTF16 too"))
+    (is (= "HÉ!" (ldk/call-static "Fixture" "shout" "(Ljava/lang/String;)Ljava/lang/String;" "hé")))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)

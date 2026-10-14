@@ -40,7 +40,7 @@
 (in-package :openldk)
 
 ;;; --- fixes carried for OpenLDK -------------------------------------------
-;;; Two OpenLDK functions replaced whole, until the pinned OpenLDK has the
+;;; OpenLDK functions replaced whole, until the pinned OpenLDK has the
 ;;; fixes. When the pin moves, compare each with its original (named below) and
 ;;; drop it once upstream matches.
 
@@ -136,6 +136,54 @@ recognise, a zip64 archive included, gets 4, upstream's assumption."
                                                       :offset (%jmod-zip-offset raw)))
              (setf opened t))
         (unless opened (close raw))))))
+
+;; From src/strings.lisp. Upstream stores a String's bytes unsigned, so a
+;; character from U+0080 to U+00FF is 128..255 where Java's byte[] holds
+;; -128..-1, and UTF16 bytes likewise. JDK code depends on the sign:
+;; String.encodeUTF8 copies a LATIN1 value unchanged when
+;; StringCoding.hasNegatives finds no negative byte, so "hé" encoded to UTF-8
+;; as the Latin-1 bytes, and String.equals compares the bytes, so a string
+;; passed in wasn't equal to the same text built in Java. Every string this
+;; bridge passes in is a jstring. This is loaded before the core initializes
+;; OpenLDK (build.sh), so no String is made with the old encoder.
+(defun %java-byte (octet)
+  "OCTET (0..255) as the signed value a Java byte holds."
+  (if (> octet 127) (- octet 256) octet))
+
+(defun %string-value-bytes (value)
+  "Encode Lisp string VALUE per Java compact-string rules.  Returns
+(values BYTES CODER): LATIN1 bytes with coder 0 when every character fits
+in a byte, otherwise UTF-16LE code units (with surrogate pairs for
+supplementary characters) with coder 1.  The bytes are signed, as in a Java
+byte[]."
+  (if (every (lambda (c) (< (char-code c) 256)) value)
+      (let ((bytes (make-array (length value) :element-type '(signed-byte 8))))
+        (dotimes (i (length value))
+          (setf (aref bytes i) (%java-byte (char-code (char value i)))))
+        (values bytes 0))
+      (let* ((units (loop for c across value
+                          sum (if (> (char-code c) #xFFFF) 2 1)))
+             (bytes (make-array (* 2 units) :element-type '(signed-byte 8)))
+             (j 0))
+        (flet ((put-unit (unit)
+                 (setf (aref bytes j) (%java-byte (logand unit #xFF)))
+                 (setf (aref bytes (1+ j)) (%java-byte (ash unit -8)))
+                 (incf j 2)))
+          (loop for c across value
+                for code = (char-code c)
+                do (if (> code #xFFFF)
+                       (let ((v (- code #x10000)))
+                         (put-unit (logior #xD800 (ash v -10)))
+                         (put-unit (logior #xDC00 (logand v #x3FF))))
+                       (put-unit code))))
+        (values bytes 1))))
+
+;; From src/native/bytearray.lisp. Upstream prints the raw bytes through
+;; code-char, which a signed byte breaks, so printing any String with such a
+;; character would fail (in a condition report, say). LSTRING reads them.
+(defmethod print-object ((str |java/lang/String|) out)
+  (print-unreadable-object (str out :type t)
+    (format out "~S" (lstring str))))
 
 ;;; --- descriptors ---------------------------------------------------------
 
