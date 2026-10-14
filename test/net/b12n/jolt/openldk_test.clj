@@ -523,6 +523,25 @@
       (ldk/with-ref [xs (ldk/new-object "java.util.ArrayList" "()V")]
         (is (re-find #"not an array" (msg #(ldk/array->primitive xs))))))))
 
+(deftest reflectively-built-arrays-read-as-java-defaults
+  ;; OpenLDK's Array.newInstance fills even a primitive array with nil, which
+  ;; Java code reads as the type's zero; the bridge has to read it the same way.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [fresh (fn [component sample]
+                  (ldk/with-ref [a (ldk/new-array component [sample])
+                                 c (ldk/call a "getClass" "()Ljava/lang/Class;")
+                                 t (ldk/call c "getComponentType" "()Ljava/lang/Class;")]
+                    (ldk/call-static "java.lang.reflect.Array" "newInstance"
+                                     "(Ljava/lang/Class;I)Ljava/lang/Object;" t 2)))]
+      (doseq [[component sample expected] [["Z" true [false false]] ["B" 1 [0 0]] ["S" 1 [0 0]]
+                                           ["I" 1 [0 0]] ["J" 1 [0 0]] ["C" \a [(char 0) (char 0)]]
+                                           ["F" 1.0 [0.0 0.0]] ["D" 1.0 [0.0 0.0]]]]
+        (ldk/with-ref [a (fresh component sample)]
+          (is (= expected (ldk/array->vec a)) component)
+          (when-not (#{"Z" "C"} component)
+            (is (= expected (vec (ldk/array->primitive a))) component)))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)
