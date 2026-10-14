@@ -126,3 +126,33 @@ them, and every lookup of a class that isn't found at all. As a compile error, t
 `bridge/bridge.lisp` picks the offset per file: 0 when the central directory's
 signature is at the offset the end record gives, 4 when it is 4 bytes later,
 and 4 for anything else, zip64 included.
+
+## 5. Strings made by OpenLDK store their bytes unsigned
+
+Found 2026-10-14 against `701609f`, which is also `master` that day, and sent
+upstream with a fix and a unit test as
+[#15](https://github.com/atgreen/openldk/pull/15), after re-checking `master`
+and searching the tracker for duplicates.
+
+`%string-value-bytes`, which `jstring` and `ijstring` use, builds a String's
+`value` from unsigned octets, so a character from U+0080 to U+00FF is stored
+as 128..255 where Java's `byte[]` holds -128..-1, and each UTF16 byte the same
+way. JDK code depends on the sign. `String.encodeUTF8` returns a LATIN1 value
+unchanged when `StringCoding.hasNegatives` finds no negative byte, so
+`"h\u00e9".getBytes(UTF_8)` gave `[104, 233]` on plain OpenLDK where a JVM
+gives `[104, -61, -87]`. `String.equals` compares the bytes, so the literal
+wasn't equal to `new String(new char[] {'h', '\u00e9'})`, and the same held for
+a UTF16 string such as `"a\u65e5"`. Strings Java builds itself were already
+signed. Every string jolt-openldk passes in is a `jstring`, so before the fix
+`"hé"` crossed in, went through `getBytes("UTF-8")` and came back as
+`[104 -23]`.
+
+`bridge/bridge.lisp` carries the fixed function, which writes both coders'
+bytes signed (`lstring` already masks each byte, so reading is unchanged), and
+a String `print-object` that prints through `lstring`, because upstream's
+passed the raw bytes to `code-char`. It's loaded before the core initializes
+OpenLDK, so no String is made the old way.
+
+The same reproduction found one more thing, not looked into: an MD5
+`MessageDigest` call made the run exit on both `master` and the fixed branch.
+
