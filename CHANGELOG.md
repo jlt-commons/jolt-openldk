@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- jolt 0.8.20 or later is required (`:jolt/min-version` in `deps.edn`, up
+  from 0.8.19), the version CI tests on every push. The tests did pass on
+  0.8.19 on 2026-10-14, but nothing keeps checking it.
+
 - Fixed, on macOS: the first use of `java.nio.file` (`Path.of`, `Files`), and
   `MessageDigest.getInstance`, failed with `The function
   OPENLDK::|jdk/internal/loader/NativeLibraries.load(...)| is undefined`.
