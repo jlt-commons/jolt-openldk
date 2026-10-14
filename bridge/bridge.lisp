@@ -18,7 +18,9 @@
 ;;;   (:main "a/B" ("arg" ...))                 (:ok (:void))
 ;;;   (:class-name id)                          (:ok (:s "a.B"))
 ;;;   (:new-array "I" (v ...))                  (:ok (:ref id "[I"))
-;;;   (:elements id)                            (:ok (:vec v ...))
+;;;   (:elements id)                            (:ok (:vec v ...)), or for a primitive
+;;;                                             array (:ok (:raw "I" address n)),
+;;;                                             malloc'd, freed by the caller
 ;;;   (:length id)                              (:ok (:i n))
 ;;;   (:proxy ("java/util/Comparator") fn-id)   (:ok (:ref id "jolt-openldk.Proxy..."))
 ;;;
@@ -421,14 +423,44 @@ list of wire values or a (:raw-array carrier address n) form."
     ((#\F #\D) (%ldk-double x))
     (t (%ldk-object x))))
 
+(defvar *ldk-raw-out* nil
+  "The reply buffer %ldk-raw-elements malloc'd for the request in flight, so
+LDK_ENTRY can free it when the reply that names it is never sent.")
+
+(defun %ldk-raw-elements (kind data)
+  "(:raw letter address n): DATA's N elements written at their Java width into
+malloc'd memory, for the caller to copy and free with ldk_free."
+  (let* ((n (length data))
+         (width (ecase kind ((#\Z #\B) 1) ((#\C #\S) 2) ((#\I #\F) 4) ((#\J #\D) 8))))
+    (if (zerop n)
+        (list :raw (string kind) 0 0)
+        (let* ((buffer (sb-alien:make-alien (sb-alien:unsigned 8) (* n width)))
+               (sap (sb-alien:alien-sap buffer)))
+          (setf *ldk-raw-out* buffer)
+          (dotimes (i n)
+            (let ((x (aref data i))
+                  (o (* i width)))
+              (ecase kind
+                (#\Z (setf (sb-sys:sap-ref-8 sap o) (if (eql x 0) 0 1)))
+                (#\B (setf (sb-sys:sap-ref-8 sap o) (logand x #xFF)))
+                (#\C (setf (sb-sys:sap-ref-16 sap o) (if (characterp x) (char-code x) x)))
+                (#\S (setf (sb-sys:signed-sap-ref-16 sap o) x))
+                (#\I (setf (sb-sys:signed-sap-ref-32 sap o) x))
+                (#\J (setf (sb-sys:signed-sap-ref-64 sap o) x))
+                (#\F (setf (sb-sys:sap-ref-single sap o) (coerce x 'single-float)))
+                (#\D (setf (sb-sys:sap-ref-double sap o) (coerce x 'double-float))))))
+          (list :raw (string kind) (sb-sys:sap-int sap) n)))))
+
 (defun %ldk-elements (array)
-  "Every element, tagged by the component type. Elements that are objects
-come back as values or handles, as any returned object does; a nested array
-is a handle of its own."
+  "Every element. A primitive array's come back as raw memory
+(%ldk-raw-elements). Other elements are tagged and come back as values or
+handles, as any returned object does; a nested array is a handle of its own."
   (let ((kind (or (cdr (assoc (%ldk-array-component-name array) *ldk-primitive-names*
                               :test #'string=))
                   #\L)))
-    (cons :vec (map 'list (lambda (x) (%ldk-element kind x)) (java-array-data array)))))
+    (if (char= kind #\L)
+        (cons :vec (map 'list (lambda (x) (%ldk-element kind x)) (java-array-data array)))
+        (%ldk-raw-elements kind (java-array-data array)))))
 
 ;;; --- values out --------------------------------------------------------------
 
@@ -794,23 +826,35 @@ a reply ever holds."
        (list :error (handler-case (format nil "~A" c)
                       (serious-condition () "unprintable Lisp condition")))))))
 
+(defun %ldk-ok-reply-p (text)
+  (and (> (length text) 4) (string= "(:ok " text :end2 5)))
+
 (sb-alien:define-alien-callable ldk_entry sb-alien:int
     ((request sb-alien:c-string) (out (* (* sb-alien:char))))
   ;; The reply is malloc'd by make-alien-string; the caller frees it with
   ;; ldk_free. If the reply itself cannot be made, say so in an :error reply
   ;; rather than a bare status, and return -1 only when even that fails.
-  (flet ((send (text)
-           (setf (sb-alien:deref out)
-                 (sb-alien:make-alien-string text :external-format :utf-8))
-           0))
-    (handler-case (send (%ldk-handle-request request))
-      (serious-condition (c)
-        (handler-case
-            (send (%ldk-print-reply
-                   (list :error (format nil "the bridge could not write its reply: ~A"
-                                        (handler-case (princ-to-string c)
-                                          (serious-condition () "unprintable condition"))))))
-          (serious-condition () -1))))))
+  ;; A raw reply buffer (*ldk-raw-out*) belongs to the caller only once the
+  ;; :ok reply naming it has been sent. On any other way out it is freed here.
+  (let ((*ldk-raw-out* nil)
+        (sent-raw nil))
+    (flet ((send (text)
+             (setf (sb-alien:deref out)
+                   (sb-alien:make-alien-string text :external-format :utf-8))
+             0))
+      (unwind-protect
+           (handler-case (let ((text (%ldk-handle-request request)))
+                           (prog1 (send text)
+                             (setf sent-raw (and *ldk-raw-out* (%ldk-ok-reply-p text)))))
+             (serious-condition (c)
+               (handler-case
+                   (send (%ldk-print-reply
+                          (list :error (format nil "the bridge could not write its reply: ~A"
+                                               (handler-case (princ-to-string c)
+                                                 (serious-condition () "unprintable condition"))))))
+                 (serious-condition () -1))))
+        (when (and *ldk-raw-out* (not sent-raw))
+          (sb-alien:free-alien *ldk-raw-out*))))))
 
 (defun %ldk-warm-invoke ()
   "Compile OpenLDK's java.lang.invoke machinery now, so no later method pays for
