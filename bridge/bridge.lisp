@@ -185,6 +185,19 @@ byte[]."
   (print-unreadable-object (str out :type t)
     (format out "~S" (lstring str))))
 
+;; Missing from src/native/threads.lisp upstream. OpenLDK's natives are Lisp,
+;; so there is no native library to load: report it as not loaded, which the
+;; JDK treats as an absent library that BootLoader.loadLibrary ignores. On
+;; macOS ClassLoaderHelper.loadLibraryOnlyIfPresent() is false, so the JDK
+;; calls this without checking for the file first, and the first use of
+;; java.nio.file, or MessageDigest.getInstance through java.security.Security,
+;; failed with an undefined function. Linux checks for the file and never
+;; gets here.
+(defun |jdk/internal/loader/NativeLibraries.load(Ljdk/internal/loader/NativeLibraries$NativeLibraryImpl;Ljava/lang/String;ZZ)|
+    (impl name is-builtin throw-exception-if-fail)
+  (declare (ignore impl name is-builtin throw-exception-if-fail))
+  0)
+
 ;;; --- descriptors ---------------------------------------------------------
 
 (defun %ldk-field-end (desc start)

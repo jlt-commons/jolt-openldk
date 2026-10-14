@@ -557,6 +557,31 @@
       (is (true? (ldk/call built "equals" "(Ljava/lang/Object;)Z" "a日")) "UTF16 too"))
     (is (= "HÉ!" (ldk/call-static "Fixture" "shout" "(Ljava/lang/String;)Ljava/lang/String;" "hé")))))
 
+(deftest java-nio-file-and-message-digest-work
+  ;; MessageDigest initializes java.security.Security, which reads its master
+  ;; file through java.nio.file, which loads the nio library. On macOS that
+  ;; reached a native OpenLDK didn't define and failed with an undefined
+  ;; function.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (ldk/with-ref [md (ldk/call-static "java.security.MessageDigest" "getInstance"
+                                       "(Ljava/lang/String;)Ljava/security/MessageDigest;" "MD5")
+                   d (ldk/call md "digest" "([B)[B" (byte-array [104 105]))]
+      (is (= [73 -10 -118 92 -124 -109 -20 44 11 -12 -119 -126 28 33 -4 59] (ldk/array->vec d))
+          "MD5 of \"hi\""))
+    (let [f (java.io.File/createTempFile "nio" ".txt")]
+      (try
+        (spit f "hello nio")
+        (ldk/with-ref [p (ldk/call-static "java.nio.file.Path" "of"
+                                          "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;"
+                                          (.getAbsolutePath f) [])]
+          (is (true? (ldk/call-static "java.nio.file.Files" "exists"
+                                      "(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z" p
+                                      (ldk/new-array "Ljava/nio/file/LinkOption;" []))))
+          (is (= "hello nio" (ldk/call-static "java.nio.file.Files" "readString"
+                                              "(Ljava/nio/file/Path;)Ljava/lang/String;" p))))
+        (finally (.delete f))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)
