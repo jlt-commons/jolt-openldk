@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed, on macOS: the first `java.util.zip` call (CRC32, Deflater, Inflater,
+  GZIP) failed with `Error opening shared object "libz.so.1"`, a Lisp error
+  that ended the process. OpenLDK loaded zlib by its Linux name.
+  `bridge/bridge.lisp` now loads `libz.1.dylib` on macOS. Sent upstream as
+  atgreen/openldk#17.
+
 - jolt 0.8.20 or later is required (`:jolt/min-version` in `deps.edn`, up
   from 0.8.19), the version CI tests on every push. The tests did pass on
   0.8.19 on 2026-10-14, but nothing keeps checking it.

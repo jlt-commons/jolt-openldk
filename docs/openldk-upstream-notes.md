@@ -185,3 +185,24 @@ Seen in the same work, not looked into: `Files.list` throws
 `ArrayIndexOutOfBoundsException: 0`, and OpenLDK opens zlib as `libz.so.1`, a
 name macOS doesn't have (`aaa/ni.java`).
 
+## 7. On macOS, zlib is loaded by its Linux name
+
+Found 2026-10-14 against `701609f`, which is also `master` that day, and sent
+upstream with a fix and a DejaGnu test as
+[#17](https://github.com/atgreen/openldk/pull/17), after re-checking `master`
+and searching the tracker for duplicates.
+
+`%load-zlib` loads `"libz.so.1"` on every platform. macOS's zlib is
+`libz.1.dylib`, in dyld's shared cache, so the first `java.util.zip` native
+call signalled "Error opening shared object", a Lisp error Java code can't
+catch. On macOS it's only reachable with the fix in 6, since loading
+`java.util.zip` goes through `BootLoader.loadLibrary`. `bridge/bridge.lisp`
+loads `libz.1.dylib` on macOS. With both, CRC32, Deflater, Inflater and a GZIP
+round trip give the JVM's results.
+
+Two more gaps the same work turned up, neither looked into:
+- Reading a zip back fails: `ZipInputStream.getNextEntry()` is an undefined
+  function, though writing with `ZipOutputStream` works.
+- `aaa/ni.java` gets past zlib now but fails on the undefined native
+  `jdk/internal/misc/VM.getNanoTimeAdjustment(J)`.
+
