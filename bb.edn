@@ -26,7 +26,8 @@
                         ["bake" "bake the tour's classpath into examples/tour/target/openldk, which bb tour then uses"]
                         ["lint" "clj-kondo over src, test and examples"]
                         ["gates" "lint, test with the build required, tour"]
-                        ["linux" "build and test on Linux in Docker (linux/Dockerfile), this machine's architecture; slow, not in gates"]]]
+                        ["linux" "build and test on Linux in Docker (linux/Dockerfile), this machine's architecture; slow, not in gates"]
+                        ["bench-arrays" "time a million-element primitive array crossing each way (needs a build); not in gates"]]]
            (println (format "  bb %-6s %s" t d)))}
 
   build
@@ -46,6 +47,10 @@
            (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
            (shell m2 "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test")
            (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.patches-test"))}
+
+  bench-arrays
+  {:doc "Time a million-element primitive array crossing each way (needs a build)"
+   :task (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bench-arrays")}
 
   tour
   {:doc "Walk through the API against a real OpenLDK"
