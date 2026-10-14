@@ -118,6 +118,42 @@
     (is (= "jolt-openldk: class not found: Nope" (ex-message e)))
     (is (= {:openldk/error "class not found: Nope"} (ex-data e)))))
 
+(deftest raw-arrays-go-out-by-address
+  (is (= "(:raw-array :i64 140000 3)" (wire/value->lisp (wire/->RawArray :i64 140000 3))))
+  (is (= "(:raw-array :z8 0 0)" (wire/value->lisp (wire/->RawArray :z8 0 0))))
+  (is (= "(:new-array \"I\" (:raw-array :i64 140000 3))"
+         (wire/new-array "I" (wire/->RawArray :i64 140000 3)))))
+
+(deftest raw-replies-parse
+  (is (= (wire/->RawReply "D" 7 0) (wire/lisp->value [:raw "D" 7 0])))
+  (is (= (wire/->RawReply "I" 140000 3) (wire/reply->value "(:ok (:raw \"I\" 140000 3))"))))
+
+(deftest descriptors-split
+  (is (= [] (wire/split-descriptor "()V")))
+  (is (= ["I" "I"] (wire/split-descriptor "(II)I")))
+  (is (= ["I" "[J" "Ljava/lang/String;" "[[I"] (wire/split-descriptor "(I[JLjava/lang/String;[[I)V")))
+  (is (= ["[Ljava/lang/Object;" "Z"] (wire/split-descriptor "([Ljava/lang/Object;Z)V")))
+  (doseq [bad ["(II" "II)V" "(Q)V" "(Ljava/lang/String)V" "([)V" "" "(La[b;)V" "(Ljava.lang.String;)V"]]
+    (is (nil? (wire/split-descriptor bad)) (pr-str bad))))
+
+(deftest typed-arrays-are-recognised
+  (is (= :byte (wire/primitive-array-kind (byte-array 1))))
+  (is (= :short (wire/primitive-array-kind (short-array 1))))
+  (is (= :int (wire/primitive-array-kind (int-array 1))))
+  (is (= :long (wire/primitive-array-kind (long-array 1))))
+  (is (= :float (wire/primitive-array-kind (float-array 1))))
+  (is (= :double (wire/primitive-array-kind (double-array 1))))
+  (is (= :char (wire/primitive-array-kind (char-array 1))))
+  (is (= :boolean (wire/primitive-array-kind (boolean-array 1))))
+  (doseq [x [[1 2] "s" nil (object-array 1)]]
+    (is (nil? (wire/primitive-array-kind x)) (pr-str x))))
+
+(deftest typed-arrays-are-refused-as-plain-values
+  (is (= "jolt-openldk: a jolt int-array can only be passed for a one-dimensional primitive array parameter or as new-array's contents"
+         (try (wire/value->lisp (int-array [1])) nil (catch Exception e (ex-message e)))))
+  (is (= "jolt-openldk: a jolt byte-array can only be passed for a one-dimensional primitive array parameter or as new-array's contents"
+         (try (wire/value->lisp (byte-array 0)) nil (catch Exception e (ex-message e))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.wire-test)]
     (when (pos? (+ fail error)) (System/exit 1))))

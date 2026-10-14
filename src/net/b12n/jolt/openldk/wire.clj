@@ -24,6 +24,60 @@
 
 (defn ref? [x] (instance? JavaRef x))
 
+;; A primitive array's elements in native memory, by address, so they cross
+;; without text. `carrier` says how they were written (see bridge.lisp's
+;; %ldk-raw-values), which is not always the component's width: a vector of
+;; integers goes as int64 whatever the component, and Lisp checks each one.
+(defrecord RawArray [carrier address length])
+
+;; The reply to :elements for a primitive array: `length` elements of the
+;; one-letter `component` at `address`, malloc'd by the bridge for the caller
+;; to copy and then free.
+(defrecord RawReply [component address length])
+
+(def ^:private primitive-array-kinds
+  [[(class (byte-array 0)) :byte] [(class (short-array 0)) :short]
+   [(class (int-array 0)) :int] [(class (long-array 0)) :long]
+   [(class (float-array 0)) :float] [(class (double-array 0)) :double]
+   [(class (char-array 0)) :char] [(class (boolean-array 0)) :boolean]])
+
+(defn primitive-array-kind
+  "The kind of jolt typed array `x` is, :byte through :boolean, or nil for
+  anything else, vectors and object arrays included."
+  [x]
+  (when (some? x)
+    (let [c (class x)]
+      (some (fn [[k kind]] (when (= c k) kind)) primitive-array-kinds))))
+
+;; --- method descriptors ---------------------------------------------------------
+
+(defn- field-end
+  "The index just past the field descriptor starting at `i` in `s`, or nil.
+  The same grammar as %ldk-field-end in bridge.lisp."
+  [s i]
+  (when (< i (count s))
+    (case (nth s i)
+      (\B \C \D \F \I \J \S \Z) (inc i)
+      \L (let [end (str/index-of s ";" i)]
+           (when (and end (> end (inc i)) (not (re-find #"[.\[()]" (subs s (inc i) end))))
+             (inc end)))
+      \[ (field-end s (inc i))
+      nil)))
+
+(defn split-descriptor
+  "The parameter descriptors of method descriptor `desc` as a vector, or nil
+  when it is malformed. bridge.lisp stays the authority: nil only means the
+  client leaves the arguments as they are and lets Lisp say what is wrong."
+  [desc]
+  (let [close (str/index-of (str desc) ")")]
+    (when (and close (str/starts-with? desc "("))
+      (loop [i 1 params []]
+        (cond
+          (= i close) params
+          :else (let [end (field-end desc i)]
+                  (when (and end (<= end close))
+                    (recur end (conj params (subs desc i end))))))))))
+
 ;; --- Clojure -> Lisp text -----------------------------------------------------
 
 (defn- lisp-string
@@ -55,10 +109,16 @@
     (true? v) "(:z :true)"
     (false? v) "(:z :false)"
     (ref? v) (str "(:ref " (:handle v) ")")
+    (instance? RawArray v) (str "(:raw-array :" (name (:carrier v)) " " (:address v) " " (:length v) ")")
     (string? v) (str "(:s " (lisp-string v) ")")
     (char? v) (str "(:c " (int v) ")")
     (integer? v) (str "(:i " v ")")
     (or (double? v) (float? v)) (lisp-double v)
+    (primitive-array-kind v)
+    (throw (ex-info (str "jolt-openldk: a jolt " (name (primitive-array-kind v))
+                         "-array can only be passed for a one-dimensional primitive array "
+                         "parameter or as new-array's contents")
+                    {:value v}))
     ;; Only a vector, not any seq: a lazy seq handed over by accident would
     ;; otherwise be realised and copied into an array.
     (vector? v) (str "(:array (" (str/join " " (map value->lisp v)) "))")
@@ -91,8 +151,14 @@
 
 (defn release [r] (str "(:release " (:handle r) ")"))
 
-(defn new-array [component values]
-  (str "(:new-array " (lisp-string component) " (" (str/join " " (map value->lisp values)) "))"))
+(defn new-array
+  "`values` is a seq of values, or a RawArray whose memory holds them."
+  [component values]
+  (str "(:new-array " (lisp-string component) " "
+       (if (instance? RawArray values)
+         (value->lisp values)
+         (str "(" (str/join " " (map value->lisp values)) ")"))
+       ")"))
 
 (defn elements [r] (str "(:elements " (:handle r) ")"))
 
@@ -161,6 +227,7 @@
     :s a
     :ref (->JavaRef a b)
     :vec (mapv lisp->value (rest v))
+    :raw (->RawReply a b (nth v 3))
     (throw (ex-info (str "jolt-openldk: unknown value in a reply: " (pr-str v)) {:value v}))))
 
 (defn reply->value
