@@ -29,8 +29,10 @@
 ;;;   (:release id)                             (:ok (:void))
 ;;;
 ;;; Values: (:i n) (:d x) (:nan) (:inf 1|-1) (:z :true|:false) (:c code) (:s "text")
-;;; (:null) (:ref id) (:array (v ...)) on the way in, the same plus (:ref id "class") and
-;;; (:void) on the way out. A Java exception is
+;;; (:null) (:ref id) (:array (v ...)) (:raw-array carrier address n) on the way
+;;; in, the same plus (:ref id "class") and (:void) on the way out. A
+;;; (:raw-array ...) names elements the client wrote into its own memory, read
+;;; before the call returns (%ldk-raw-values). A Java exception is
 ;;; (:throw "java.lang.Class" "message"|:null "toString()").
 
 (in-package :openldk)
@@ -258,6 +260,7 @@ or nil. A JavaRef's class is not checked against the parameter's here.")
   (case tag
     (:i "an integer") (:d "a double") (:z "a boolean") (:c "a char")
     (:s "a string") (:array "a vector") (:ref "an object") (:null "null")
+    (:raw-array "a primitive array")
     (t (string-downcase (string tag)))))
 
 (defun %ldk-wire-double (value)
@@ -322,6 +325,7 @@ or nil. A JavaRef's class is not checked against the parameter's here.")
       (#\[ (case tag
              (:null nil)
              (:array (%ldk-make-array (subseq param 1) (second value)))
+             (:raw-array (%ldk-make-array (subseq param 1) value))
              (:ref (let ((object (%ldk-deref (second value))))
                      (unless (java-array-p object)
                        (error "a ~A for array parameter ~A" (%ldk-class-dotted object) param))
@@ -360,10 +364,37 @@ or nil. A JavaRef's class is not checked against the parameter's here.")
   "\"int\", \"java.lang.String\" or \"[I\": Class.getName of the component."
   (%ldk-lstring (|getName()| (%array-component-class array))))
 
+(defun %ldk-raw-values (carrier address n)
+  "The N elements a (:raw-array CARRIER ADDRESS N) value names, as the wire
+values the text path would have sent for them, so %ldk-make-array checks them
+and words its errors exactly as it does for a vector. The client writes
+integers as int64 and floating values as float64 (or a float-array's own
+float32), so nothing was narrowed before the check."
+  (unless (and (integerp n) (>= n 0))
+    (error "a raw array needs a length of 0 or more, got ~D" n))
+  (when (and (plusp n) (eql address 0))
+    (error "a raw array of ~D elements cannot be at address 0" n))
+  (let ((sap (sb-sys:int-sap address)))
+    (flet ((each (width read)
+             (loop for i below n collect (funcall read (* i width)))))
+      (case carrier
+        (:i8 (each 1 (lambda (o) (list :i (sb-sys:signed-sap-ref-8 sap o)))))
+        (:i16 (each 2 (lambda (o) (list :i (sb-sys:signed-sap-ref-16 sap o)))))
+        (:i32 (each 4 (lambda (o) (list :i (sb-sys:signed-sap-ref-32 sap o)))))
+        (:i64 (each 8 (lambda (o) (list :i (sb-sys:signed-sap-ref-64 sap o)))))
+        (:f32 (each 4 (lambda (o) (list :d (coerce (sb-sys:sap-ref-single sap o) 'double-float)))))
+        (:f64 (each 8 (lambda (o) (list :d (sb-sys:sap-ref-double sap o)))))
+        (:z8 (each 1 (lambda (o) (list :z (if (zerop (sb-sys:sap-ref-8 sap o)) :false :true)))))
+        (:c32 (each 4 (lambda (o) (list :c (sb-sys:signed-sap-ref-32 sap o)))))
+        (t (error "unknown raw array carrier ~S" carrier))))))
+
 (defun %ldk-make-array (component values)
   "A Java array whose component has descriptor COMPONENT (I, Ljava/lang/String;,
-[I ...), holding wire VALUES converted as arguments of that type."
+[I ...), holding wire VALUES converted as arguments of that type. VALUES is a
+list of wire values or a (:raw-array carrier address n) form."
   (%ldk-check-field component)
+  (when (eq (first values) :raw-array)
+    (setf values (apply #'%ldk-raw-values (rest values))))
   (let ((elements (loop for v in values
                         for i from 0
                         collect (handler-case (%ldk-arg component v)

@@ -154,11 +154,15 @@
         e)))
 
 (defn- send!
-  "One request across, one reply back, decoded."
+  "One request across, one reply back, decoded. `request` is the request text,
+  or a fn of the call's arena that returns it, for a request that names memory
+  in that arena (a staged primitive array). The arena closes after the reply,
+  and the bridge has copied out of it by then."
   [request]
   (locking call-lock
     (ffi/with-arena [a]
-      (let [out (ffi/alloc a 8)
+      (let [request (if (string? request) request (request a))
+            out (ffi/alloc a 8)
             rc (ldk-call (ffi/string->ptr a request) out)]
         (when-not (zero? rc)
           (throw (ex-info (str "jolt-openldk: the bridge could not produce a reply (status " rc ")")
@@ -326,26 +330,96 @@
 
 (defn ref? [x] (wire/ref? x))
 
+;; --- primitive arrays as raw memory --------------------------------------------------
+;;
+;; A vector or jolt typed array headed for a primitive array is written into the
+;; call's arena and named by address, as a wire/RawArray. It is written wide,
+;; never narrowed (integers as int64, floating values as float64, chars as int32
+;; code points), because bridge.lisp checks each element against the component
+;; and words the errors as it does for text. A vector that mixes kinds, or holds
+;; a nil, a string or an integer past a long, isn't staged and crosses as text.
+
+(def ^:private primitive-letters #{"Z" "B" "C" "S" "I" "J" "F" "D"})
+
+(defn- fits-long? [x] (and (integer? x) (<= Long/MIN_VALUE x Long/MAX_VALUE)))
+
+(defn- write-raw [arena carrier width n write!]
+  (if (zero? n)
+    (wire/->RawArray carrier 0 0)
+    (let [p (ffi/alloc arena (* width n))]
+      (write! p)
+      (wire/->RawArray carrier p n))))
+
+(defn- stage
+  "`value` written into `arena` as a RawArray for a primitive array whose
+  component is the one-letter descriptor `component`, or nil when it isn't a
+  vector or typed array that fits one carrier. The component isn't consulted
+  beyond that: the bridge checks every element against it."
+  [arena _component value]
+  (if-let [kind (wire/primitive-array-kind value)]
+    (let [n (alength value)]
+      (case kind
+        :byte (write-raw arena :i8 1 n #(ffi/write-array % value))
+        :short (write-raw arena :i16 2 n #(ffi/write-array % :int16 value))
+        :int (write-raw arena :i32 4 n #(ffi/write-array % :int32 value))
+        :long (write-raw arena :i64 8 n #(ffi/write-array % :int64 value))
+        :float (write-raw arena :f32 4 n #(ffi/write-array % :float value))
+        :double (write-raw arena :f64 8 n #(ffi/write-array % :double value))
+        :char (write-raw arena :c32 4 n #(ffi/write-array % :int32 (int-array (map int value))))
+        :boolean (write-raw arena :z8 1 n #(ffi/write-array % (byte-array (map (fn [z] (if z 1 0)) value))))))
+    (when (vector? value)
+      (let [n (count value)]
+        (cond
+          (zero? n) (wire/->RawArray :i64 0 0)
+          (every? fits-long? value)
+          (write-raw arena :i64 8 n #(ffi/write-array % :int64 (long-array value)))
+          (every? #(or (double? %) (float? %)) value)
+          (write-raw arena :f64 8 n #(ffi/write-array % :double (double-array value)))
+          (every? boolean? value)
+          (write-raw arena :z8 1 n #(ffi/write-array % (byte-array (map (fn [z] (if z 1 0)) value))))
+          (every? char? value)
+          (write-raw arena :c32 4 n #(ffi/write-array % :int32 (int-array (map int value))))
+          :else nil)))))
+
+(defn- primitive-array-param [param]
+  (when (and (= 2 (count param)) (= \[ (first param)))
+    (primitive-letters (subs param 1))))
+
+(defn- stage-args
+  "`args` with each one bound for a one-dimensional primitive array parameter
+  of `descriptor` staged in `arena` where it fits. When the descriptor doesn't
+  split, or the count differs, nothing is staged and bridge.lisp reports it;
+  a typed array then goes as its elements so that report is the one you see."
+  [arena descriptor args]
+  (let [params (wire/split-descriptor descriptor)]
+    (if (and params (= (count params) (count args)))
+      (mapv (fn [param arg]
+              (if-let [letter (primitive-array-param param)]
+                (or (stage arena letter arg) arg)
+                arg))
+            params args)
+      (mapv #(if (wire/primitive-array-kind %) (vec %) %) args))))
+
 (defn- dotted [class-name] (str/replace class-name "/" "."))
 
 (defn call-static
   "Call static `method` with JNI `descriptor` on class `class-name` (dotted or
   slashed): (call-static \"java.lang.Integer\" \"parseInt\" \"(Ljava/lang/String;)I\" \"42\")."
   [class-name method descriptor & args]
-  (send! (wire/static (dotted class-name) method descriptor args)))
+  (send! (fn [a] (wire/static (dotted class-name) method descriptor (stage-args a descriptor args)))))
 
 (defn new-object
   "Construct `class-name` through the constructor `descriptor` (its return type
   is V): (new-object \"java.util.ArrayList\" \"(I)V\" 10). Returns a JavaRef."
   [class-name descriptor & args]
-  (send! (wire/new-object (dotted class-name) descriptor args)))
+  (send! (fn [a] (wire/new-object (dotted class-name) descriptor (stage-args a descriptor args)))))
 
 (defn call
   "Call instance `method` on JavaRef `obj`, dispatched virtually as Java would."
   [obj method descriptor & args]
   (when-not (ref? obj)
     (throw (ex-info "jolt-openldk: call needs a JavaRef as its receiver" {:receiver obj})))
-  (send! (wire/invoke obj method descriptor args)))
+  (send! (fn [a] (wire/invoke obj method descriptor (stage-args a descriptor args)))))
 
 (defn class-name
   "The runtime class of `obj`, dotted."
@@ -363,9 +437,13 @@
 (defn new-array
   "A Java array with component descriptor `component` (\"I\", \"D\",
   \"Ljava/lang/String;\", \"[I\" for int[][]) holding `values`, as a JavaRef.
-  Each value converts as an argument of the component type would."
+  Each value converts as an argument of the component type would. `values` may
+  also be a jolt typed array (int-array, byte-array ...), which converts like a
+  vector of its elements."
   [component values]
-  (send! (wire/new-array component values)))
+  (send! (fn [a]
+           (wire/new-array component (or (when (primitive-letters component) (stage a component values))
+                                         values)))))
 
 (defn array->vec
   "The elements of Java array `arr` as a vector, converted the way a returned

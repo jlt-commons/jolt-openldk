@@ -384,6 +384,88 @@
    (ldk/init! {:classpath classes})
    (is (nil? (ldk/run-main "Fixture" "a" "b")))))
 
+;;; --- primitive arrays as raw memory -----------------------------------------------
+
+;; Rows of [component vector typed-array-fn expected]. F and D compare by str,
+;; so NaN and -0.0 compare.
+(def ^:private primitive-rows
+  [["I" [-2147483648 0 2147483647] int-array [-2147483648 0 2147483647]]
+   ["J" [Long/MIN_VALUE 0 Long/MAX_VALUE] long-array [Long/MIN_VALUE 0 Long/MAX_VALUE]]
+   ["S" [-32768 0 32767] short-array [-32768 0 32767]]
+   ["B" [-128 -1 0 127] byte-array [-128 -1 0 127]]
+   ["C" [\a \é (char 0xFFFF)] char-array [\a \é (char 0xFFFF)]]
+   ["Z" [true false true] boolean-array [true false true]]
+   ["F" [0.5 -1.25 ##NaN ##Inf] float-array [0.5 -1.25 ##NaN ##Inf]]
+   ["D" [0.0 -0.0 ##NaN ##Inf ##-Inf 1.0E300] double-array [0.0 -0.0 ##NaN ##Inf ##-Inf 1.0E300]]])
+
+(defn- round-trip [component contents]
+  (ldk/with-ref [xs (ldk/new-array component contents)]
+    (ldk/array->vec xs)))
+
+(defn- comparable [component v]
+  (if (#{"F" "D"} component) (mapv str v) v))
+
+(deftest primitive-arrays-go-in-as-raw-memory
+  (when-built
+    (ldk/init! {:classpath classes})
+    (doseq [[component v typed expected] primitive-rows]
+      (is (= (comparable component expected) (comparable component (round-trip component v)))
+          (str component " from a vector"))
+      (is (= (comparable component expected) (comparable component (round-trip component (typed v))))
+          (str component " from a typed array")))
+    (is (= [55296] (round-trip "C" [0xD800])) "a lone surrogate half comes back as its integer")
+    (doseq [[component _ typed _] primitive-rows]
+      (ldk/with-ref [a (ldk/new-array component [])
+                     b (ldk/new-array component (typed []))]
+        (is (= [0 0] [(ldk/array-length a) (ldk/array-length b)]) (str "empty " component))))))
+
+(deftest typed-arrays-pass-for-primitive-array-parameters
+  (when-built
+    (ldk/init! {:classpath classes})
+    (is (= 6 (ldk/call-static "Fixture" "sum" "([I)I" (int-array [1 2 3]))))
+    (is (= 3 (ldk/call-static "Fixture" "total" "([J)J" (int-array [1 2]))) "an int-array widens")
+    (is (= 2.0 (ldk/call-static "Fixture" "avg" "([D)D" (int-array [1 3]))))
+    (is (= 2.0 (ldk/call-static "Fixture" "avg" "([D)D" (double-array [1.0 3.0]))))
+    (is (= -2 (ldk/call-static "Fixture" "byteSum" "([B)I" (byte-array [-1 127 -128]))))
+    (is (= 2 (ldk/call-static "Fixture" "trues" "([Z)I" (boolean-array [true false true]))))
+    (is (= \é (ldk/call-static "Fixture" "last" "([C)C" (char-array [\h \é]))))
+    (is (= "[1.0, 2.5]" (ldk/call-static "java.util.Arrays" "toString" "([D)Ljava/lang/String;" [1 2.5]))
+        "a vector of mixed numbers still takes the text path")))
+
+(deftest raw-arrays-keep-todays-refusals
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))
+          typed-refusal "jolt-openldk: a jolt int-array can only be passed for a one-dimensional primitive array parameter or as new-array's contents"]
+      (is (= "jolt-openldk: element 0 of the vector for [B: 200 does not fit a Java byte"
+             (msg #(ldk/call-static "Fixture" "byteSum" "([B)I" [200]))))
+      (is (= "jolt-openldk: element 1 of the vector for [I: 3000000000 does not fit a Java int"
+             (msg #(ldk/call-static "Fixture" "sum" "([I)I" (long-array [1 3000000000])))))
+      (is (= "jolt-openldk: element 1 of the vector for [I: a double for parameter I"
+             (msg #(ldk/new-array "I" [1 2.5]))))
+      (is (= "jolt-openldk: element 1 of the vector for [I: null for parameter I"
+             (msg #(ldk/call-static "Fixture" "sum" "([I)I" [1 nil]))))
+      (is (= "jolt-openldk: element 1 of the vector for [J: 9223372036854775808 does not fit a Java long"
+             (msg #(ldk/call-static "Fixture" "total" "([J)J" [1 (inc' Long/MAX_VALUE)]))))
+      (is (= typed-refusal (msg #(ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;" (int-array [1])))))
+      (is (= typed-refusal (msg #(ldk/call-static "Fixture" "join" "([Ljava/lang/String;)Ljava/lang/String;" (int-array [1])))))
+      (is (= typed-refusal (msg #(ldk/call-static "Fixture" "deep" "([[I)I" [(int-array [1])]))))
+      (is (re-find #"malformed method descriptor" (msg #(ldk/call-static "Fixture" "sum" "([I" (int-array [1]))))))))
+
+(deftest raw-array-wire-refusals
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [send (deref (resolve 'net.b12n.jolt.openldk/send!))
+          msg #(ex-message (thrown (fn [] (send %))))]
+      (is (re-find #"a raw array needs a length of 0 or more, got -1"
+                   (msg "(:new-array \"I\" (:raw-array :i64 0 -1))")))
+      (is (re-find #"a raw array of 5 elements cannot be at address 0"
+                   (msg "(:new-array \"I\" (:raw-array :i64 0 5))")))
+      (is (re-find #"unknown raw array carrier :Q"
+                   (msg "(:new-array \"I\" (:raw-array :q 0 0))")))
+      (is (re-find #"a primitive array cannot be passed for parameter Ljava/lang/Object;"
+                   (msg "(:static \"Fixture\" \"describe\" \"(Ljava/lang/Object;)Ljava/lang/String;\" ((:raw-array :i64 0 0)))"))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)
