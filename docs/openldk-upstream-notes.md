@@ -83,7 +83,10 @@ printing `"é"`, `"é".toUpperCase().length()`, `(int) "é".toUpperCase().charAt
 
 ## 3. A failed compile of an instance method loops forever
 
-Found 2026-10-14 against `701609f`, which is also `master` that day.
+Found 2026-10-14 against `701609f`, which is also `master` that day. Bugs 3
+and 4 went upstream together the same day, as a pull request with both fixes
+and unit tests, [#14](https://github.com/atgreen/openldk/pull/14), after
+re-checking `master` and searching the tracker for duplicates.
 
 When `%compile-method` fails, `%install-jit-error-stub` installs a stub that
 throws, so the method's lazy compile stub isn't left behind. For an instance
