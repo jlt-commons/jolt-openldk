@@ -438,7 +438,10 @@ malloc'd memory, for the caller to copy and free with ldk_free."
                (sap (sb-alien:alien-sap buffer)))
           (setf *ldk-raw-out* buffer)
           (dotimes (i n)
-            (let ((x (aref data i))
+            ;; OpenLDK's Array.newInstance fills even a primitive array with
+            ;; NIL, which its compiled Java code reads as zero, so NIL is
+            ;; written as the type's zero (false, 0, 0.0, U+0000) too.
+            (let ((x (or (aref data i) 0))
                   (o (* i width)))
               (ecase kind
                 (#\Z (setf (sb-sys:sap-ref-8 sap o) (if (eql x 0) 0 1)))
