@@ -388,7 +388,9 @@ so the memory is freed here whatever happens to the copy."
         :short (write-raw arena :i16 2 n #(ffi/write-array % :int16 value))
         :int (write-raw arena :i32 4 n #(ffi/write-array % :int32 value))
         :long (write-raw arena :i64 8 n #(ffi/write-array % :int64 value))
-        :float (write-raw arena :f32 4 n #(ffi/write-array % :float value))
+        ;; Widened, exactly: jolt 0.8.20's write-array :float refuses the
+        ;; Floats a float-array holds.
+        :float (write-raw arena :f64 8 n #(ffi/write-array % :double (double-array (map double value))))
         :double (write-raw arena :f64 8 n #(ffi/write-array % :double value))
         :char (write-raw arena :c32 4 n #(ffi/write-array % :int32 (int-array (map int value))))
         :boolean (write-raw arena :z8 1 n #(ffi/write-array % (byte-array (map (fn [z] (if z 1 0)) value))))))
