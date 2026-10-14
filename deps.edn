@@ -1,8 +1,8 @@
 {:paths ["src"]
 
- ;; The only version this has run on. A floor set where it was measured is
- ;; safe; one set lower is a guess.
- :jolt/min-version "0.8.19"
+ ;; The version CI pins (JOLT_VERSION in .github/workflows/ci.yml), so the
+ ;; floor is a version every push is tested on. A floor set lower is a guess.
+ :jolt/min-version "0.8.20"
 
  ;; No :jolt/native entry: the shim is found at run time in the build
  ;; directory (net.b12n.jolt.openldk/dist-dir), because bridge/build.sh puts it
