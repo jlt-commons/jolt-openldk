@@ -369,9 +369,10 @@ or nil. A JavaRef's class is not checked against the parameter's here.")
 (defun %ldk-raw-values (carrier address n)
   "The N elements a (:raw-array CARRIER ADDRESS N) value names, as the wire
 values the text path would have sent for them, so %ldk-make-array checks them
-and words its errors exactly as it does for a vector. The client writes
-integers as int64 and floating values as float64 (or a float-array's own
-float32), so nothing was narrowed before the check."
+and words its errors exactly as it does for a vector. The client never
+narrows a value before the check: integers go as int64 or a typed array's own
+width, floating values as float64, chars as int32 code points. :f32 is read
+too, though the client widens a float-array to :f64."
   (unless (and (integerp n) (>= n 0))
     (error "a raw array needs a length of 0 or more, got ~D" n))
   (when (and (plusp n) (eql address 0))
