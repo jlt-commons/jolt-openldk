@@ -124,9 +124,14 @@ recognise, a zip64 archive included, gets 4, upstream's assumption."
                    (= (aref magic 3) #x00))
         (close raw)
         (error "Not a valid JMOD file: ~A" pathname)))
-    (let ((wrapper (make-instance 'jmod-offset-stream :inner raw
-                                                      :offset (%jmod-zip-offset raw))))
-      (zip::open-zipfile-from-stream wrapper))))
+    ;; Close RAW if either step fails, which upstream doesn't.
+    (let ((opened nil))
+      (unwind-protect
+           (prog1 (zip::open-zipfile-from-stream
+                   (make-instance 'jmod-offset-stream :inner raw
+                                                      :offset (%jmod-zip-offset raw)))
+             (setf opened t))
+        (unless opened (close raw))))))
 
 ;;; --- descriptors ---------------------------------------------------------
 

@@ -35,6 +35,16 @@
 (defn- temp-dir [prefix]
   (doto (java.io.File/createTempFile prefix "") .delete .mkdirs))
 
+(defn- delete-tree
+  "Deletes F and what's under it. A symlink is deleted, never followed, which
+  matters here: the fake JAVA_HOME is mostly links into the real JDK."
+  [f]
+  (let [f (io/file f)
+        path (.toPath f)]
+    (when (and (not (Files/isSymbolicLink path)) (.isDirectory f))
+      (run! delete-tree (.listFiles f)))
+    (Files/deleteIfExists path)))
+
 (defn- write-bytes! [f bs]
   (.mkdirs (.getParentFile (io/file f)))
   (Files/write (.toPath (io/file f)) bs (into-array OpenOption [])))
@@ -42,8 +52,8 @@
 (defn- run-check
   "Runs patchcheck with ARGS in a jolt subprocess, ENV added to its
   environment. Returns the map it printed, or {:timed-out true} after killing a
-  process that ran past timeout-ms. It has to be killed outright: SBCL ignores
-  SIGTERM."
+  process that ran past timeout-ms. It's killed outright, since a SIGTERM
+  didn't stop the hang it checks for within two seconds."
   [env & args]
   (let [proc (apply p/process {:dir project :extra-env env :out :string :err :string}
                     "jolt" "-M" "-m" "patchcheck" args)
@@ -86,10 +96,12 @@
   ;; generic function and the lazy compile stub kept calling itself.
   (when-built
    (let [dir (temp-dir "jsr")]
-     (write-bytes! (io/file dir "p" "Jsr.class") (jsr-class))
-     (let [r (run-check {} (str dir) "p.Jsr" "()V")]
-       (is (not (:timed-out r)) "the constructor call returns")
-       (is (str/includes? (str (:error r)) "JIT compilation failed for p/Jsr.m()V") (pr-str r))))))
+     (try
+       (write-bytes! (io/file dir "p" "Jsr.class") (jsr-class))
+       (let [r (run-check {} (str dir) "p.Jsr" "()V")]
+         (is (not (:timed-out r)) "the constructor call returns")
+         (is (str/includes? (str (:error r)) "JIT compilation failed for p/Jsr.m()V") (pr-str r)))
+       (finally (delete-tree dir))))))
 
 ;;; --- a jmod whose zip offsets count from the start of the file --------------
 
@@ -147,9 +159,11 @@
      (if-not (.isFile (io/file real "jmods" "java.prefs.jmod"))
        (println "  (skipping the file-absolute jmod check:" real "has no jmods/java.prefs.jmod)")
        (let [home (fake-java-home real)]
-         (is (= {:ok "java.util.prefs.BackingStoreException: m"}
-                (run-check {"JAVA_HOME" (str home)} (str home)
-                           "java.util.prefs.BackingStoreException" "(Ljava/lang/String;)V" "m"))))))))
+         (try
+           (is (= {:ok "java.util.prefs.BackingStoreException: m"}
+                  (run-check {"JAVA_HOME" (str home)} (str home)
+                             "java.util.prefs.BackingStoreException" "(Ljava/lang/String;)V" "m")))
+           (finally (delete-tree home))))))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.patches-test)]
