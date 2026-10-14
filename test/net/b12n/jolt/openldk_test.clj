@@ -582,6 +582,25 @@
                                               "(Ljava/nio/file/Path;)Ljava/lang/String;" p))))
         (finally (.delete f))))))
 
+(deftest java-util-zip-works
+  ;; OpenLDK's java.util.zip natives call the system zlib, which it loaded as
+  ;; libz.so.1, a name macOS doesn't have.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [data (.getBytes "hello hello hello zlib" "UTF-8")]
+      (ldk/with-ref [crc (ldk/new-object "java.util.zip.CRC32" "()V")]
+        (ldk/call crc "update" "([B)V" data)
+        (is (= 0x55381b8f (ldk/call crc "getValue" "()J"))))
+      (ldk/with-ref [bo (ldk/new-object "java.io.ByteArrayOutputStream" "()V")]
+        (ldk/with-ref [gz (ldk/new-object "java.util.zip.GZIPOutputStream" "(Ljava/io/OutputStream;)V" bo)]
+          (ldk/call gz "write" "([B)V" data)
+          (ldk/call gz "close" "()V"))
+        (ldk/with-ref [packed (ldk/call bo "toByteArray" "()[B")
+                       bi (ldk/new-object "java.io.ByteArrayInputStream" "([B)V" packed)
+                       gin (ldk/new-object "java.util.zip.GZIPInputStream" "(Ljava/io/InputStream;)V" bi)
+                       back (ldk/call gin "readAllBytes" "()[B")]
+          (is (= (vec data) (ldk/array->vec back)) "a GZIP round trip"))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)

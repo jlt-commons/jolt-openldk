@@ -198,6 +198,16 @@ byte[]."
   (declare (ignore impl name is-builtin throw-exception-if-fail))
   0)
 
+;; From src/zlib-native.lisp. Upstream loads the system zlib as "libz.so.1",
+;; the Linux name, so on macOS the first java.util.zip native call (CRC32,
+;; Deflater, Inflater, GZIP) signalled "Error opening shared object", a Lisp
+;; error Java code can't catch. macOS's zlib is libz.1.dylib, in dyld's
+;; shared cache.
+(defun %load-zlib ()
+  (unless *zlib-loaded*
+    (sb-alien:load-shared-object #+darwin "libz.1.dylib" #-darwin "libz.so.1")
+    (setf *zlib-loaded* t)))
+
 ;;; --- descriptors ---------------------------------------------------------
 
 (defun %ldk-field-end (desc start)
