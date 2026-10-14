@@ -203,6 +203,24 @@ round trip give the JVM's results.
 Two more gaps the same work turned up, neither looked into:
 - Reading a zip back fails: `ZipInputStream.getNextEntry()` is an undefined
   function, though writing with `ZipOutputStream` works.
-- `aaa/ni.java` gets past zlib now but fails on the undefined native
-  `jdk/internal/misc/VM.getNanoTimeAdjustment(J)`.
+- `aaa/ni.java` got past zlib but then failed on the undefined native
+  `jdk/internal/misc/VM.getNanoTimeAdjustment(J)`. That is 8.
+
+## 8. VM.getNanoTimeAdjustment is undefined
+
+Found 2026-10-14 against `701609f`, which is also `master` that day, and sent
+upstream with a fix, a unit test and a DejaGnu test as
+[#18](https://github.com/atgreen/openldk/pull/18), after re-checking `master`
+and searching the tracker for duplicates.
+
+It's the native behind `Clock.currentInstant`, so `Instant.now()` signalled
+an undefined function on every platform. `Date.toString` reaches it too, in a
+time zone with no CLDR display name: `TimeZone.getDisplayName` falls back to a
+GMT format through `Instant.now()`. That's why `aaa/ni.java` failed here in
+`GMT+07:00` but passes in CI's UTC. `bridge/bridge.lisp` defines it as HotSpot
+does: nanoseconds from the given epoch offset to now, or -1 when the offset is
+2^32 seconds or more away.
+
+With the fixes in 6, 7 and 8 together, OpenLDK's own `make check-regression`
+passes on macOS arm64: 501 core passes against a baseline of 492.
 

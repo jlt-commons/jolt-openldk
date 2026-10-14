@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed: `Instant.now()` failed with `The function
+  OPENLDK::|jdk/internal/misc/VM.getNanoTimeAdjustment(J)| is undefined`, and
+  so did `Date.toString` in a time zone CLDR has no display name for
+  (`GMT+07:00`, say). `bridge/bridge.lisp` now defines the native as HotSpot
+  does. Sent upstream as atgreen/openldk#18.
+
 - Fixed, on macOS: the first `java.util.zip` call (CRC32, Deflater, Inflater,
   GZIP) failed with `Error opening shared object "libz.so.1"`, a Lisp error
   that ended the process. OpenLDK loaded zlib by its Linux name.
