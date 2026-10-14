@@ -18,9 +18,12 @@
   char.
 
   Scalars, strings and boxed scalars come back as Clojure values. A Clojure
-  vector passed for an array parameter becomes a Java array. Every other
-  object, returned arrays included, comes back as a JavaRef, a handle that keeps the object alive until
-  `release!`. A Java exception is an ex-info with :java/class, :java/message
+  vector passed for an array parameter becomes a Java array, and so does a jolt
+  typed array (int-array, byte-array ...) passed for a primitive one. A
+  primitive array's elements cross as raw memory rather than text. Every other
+  object, returned arrays included, comes back as a JavaRef, a handle that
+  keeps the object alive until `release!`; read an array with `array->vec`, or
+  a numeric one with `array->primitive`. A Java exception is an ex-info with :java/class, :java/message
   and :java/string.
 
   One OpenLDK per process, set up once with one classpath, and no shutdown.
@@ -153,6 +156,27 @@
           (some-> (wire/callback-error-id message) take-error!))
         e)))
 
+(defn- copy-raw
+  "The elements a wire/RawReply names, copied into a fresh jolt typed array,
+as {:component letter :data array}. The bridge malloc'd them for this caller,
+so the memory is freed here whatever happens to the copy."
+  [{:keys [component address length]}]
+  (if (zero? length)
+    {:component component
+     :data (case component
+             ("Z" "B") (byte-array 0) ("C" "S") (short-array 0) "I" (int-array 0)
+             "J" (long-array 0) "F" (float-array 0) "D" (double-array 0))}
+    (try
+      {:component component
+       :data (case component
+               ("Z" "B") (ffi/read-array address length)
+               ("C" "S") (ffi/read-array address :int16 length)
+               "I" (ffi/read-array address :int32 length)
+               "J" (ffi/read-array address :int64 length)
+               "F" (ffi/read-array address :float length)
+               "D" (ffi/read-array address :double length))}
+      (finally (ldk-free address)))))
+
 (defn- send!
   "One request across, one reply back, decoded. `request` is the request text,
   or a fn of the call's arena that returns it, for a request that names memory
@@ -168,9 +192,10 @@
           (throw (ex-info (str "jolt-openldk: the bridge could not produce a reply (status " rc ")")
                           {:rc rc :request request})))
         (let [p (ffi/read out :pointer 0)
-              text (try (ffi/ptr->string p) (finally (ldk-free p)))]
-          (try (wire/reply->value text)
-               (catch Exception e (throw (rethrow-original e)))))))))
+              text (try (ffi/ptr->string p) (finally (ldk-free p)))
+              v (try (wire/reply->value text)
+                     (catch Exception e (throw (rethrow-original e))))]
+          (if (instance? net.b12n.jolt.openldk.wire.RawReply v) (copy-raw v) v))))))
 
 (defn project-classpath
   "What `init!` would use for `opts` from the current directory: a map of
@@ -451,7 +476,34 @@
   char[] to chars, String[] to strings. Elements that are other objects,
   nested arrays included, come back as JavaRefs to release."
   [arr]
-  (send! (wire/elements arr)))
+  (let [r (send! (wire/elements arr))]
+    (if (map? r)
+      (let [{:keys [component data]} r]
+        (case component
+          "Z" (mapv #(not (zero? %)) data)
+          "C" (mapv (fn [x] (let [u (bit-and x 0xFFFF)] (if (<= 0xD800 u 0xDFFF) u (char u)))) data)
+          ("F" "D") (mapv double data)
+          (mapv long data)))
+      r)))
+
+(defn array->primitive
+  "The elements of numeric Java array `arr` as a fresh jolt typed array:
+  byte[] to a byte-array, short[] to a short-array, int[] to an int-array,
+  long[] to a long-array, float[] to a float-array, double[] to a
+  double-array. A copy: changing it doesn't change the Java array. char[] and
+  boolean[] are refused, since a jolt char can't hold half a surrogate pair;
+  array->vec reads them as fast."
+  [arr]
+  (let [cls (class-name arr)]
+    (cond
+      (#{"[C" "[Z"} cls)
+      (throw (ex-info (str "jolt-openldk: array->primitive takes a numeric array; use array->vec for a "
+                           (if (= "[C" cls) "char[]" "boolean[]"))
+                      {:class cls}))
+      (and (str/starts-with? cls "[") (not (#{"[B" "[S" "[I" "[J" "[F" "[D"} cls)))
+      (throw (ex-info (str "jolt-openldk: array->primitive takes a numeric array, not a " cls)
+                      {:class cls}))
+      :else (:data (send! (wire/elements arr))))))
 
 (defn array-length [arr] (send! (wire/array-length arr)))
 

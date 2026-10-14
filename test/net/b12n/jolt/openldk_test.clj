@@ -466,6 +466,63 @@
       (is (re-find #"a primitive array cannot be passed for parameter Ljava/lang/Object;"
                    (msg "(:static \"Fixture\" \"describe\" \"(Ljava/lang/Object;)Ljava/lang/String;\" ((:raw-array :i64 0 0)))"))))))
 
+(deftest primitive-arrays-come-back-as-raw-memory
+  (when-built
+    (ldk/init! {:classpath classes})
+    (testing "elements keep today's types"
+      (doseq [[component v] [["I" [5]] ["B" [5]] ["J" [5]]]]
+        (is (= (class 1) (class (first (round-trip component v)))) component))
+      (is (= (class 1.0) (class (first (round-trip "D" [5.0]))))))
+    (testing "arrays Java built itself"
+      (ldk/with-ref [s (ldk/new-object "java.lang.String" "(Ljava/lang/String;)V" "hé")
+                     bs (ldk/call s "getBytes" "(Ljava/lang/String;)[B" "ISO-8859-1")]
+        ;; Stored unsigned by OpenLDK's JSTRING, read back signed as Java's.
+        (is (= [104 -23] (ldk/array->vec bs)))
+        (is (= [104 -23] (vec (ldk/array->primitive bs)))))
+      (ldk/with-ref [s (ldk/new-object "java.lang.String" "(Ljava/lang/String;)V" "a😀")
+                     cs (ldk/call s "toCharArray" "()[C")]
+        (is (= [\a 55357 56832] (ldk/array->vec cs)) "surrogate halves come back as integers"))
+      (ldk/with-ref [xs (ldk/new-array "I" [3 1 2])]
+        (ldk/call-static "java.util.Arrays" "sort" "([I)V" xs)
+        (is (= [1 2 3] (vec (ldk/array->primitive xs))))))))
+
+(deftest array-primitive-returns-typed-arrays
+  (when-built
+    (ldk/init! {:classpath classes})
+    (doseq [[component v typed] primitive-rows
+            :when (#{"B" "S" "I" "J" "F" "D"} component)]
+      (ldk/with-ref [xs (ldk/new-array component v)]
+        (let [out (ldk/array->primitive xs)]
+          (is (= (class (typed [])) (class out)) component)
+          (is (= (comparable component v) (comparable component (vec out))) component)))
+      (ldk/with-ref [xs (ldk/new-array component [])]
+        (is (zero? (alength (ldk/array->primitive xs))) (str "empty " component))))
+    (testing "a copy each way"
+      (ldk/with-ref [xs (ldk/new-array "I" [1 2 3])]
+        (let [out (ldk/array->primitive xs)]
+          (aset out 0 99)
+          (is (= [1 2 3] (ldk/array->vec xs)) "changing the jolt array leaves Java's alone")))
+      (let [in (int-array [3 1 2])]
+        (ldk/with-ref [xs (ldk/new-array "I" in)]
+          (ldk/call-static "java.util.Arrays" "sort" "([I)V" xs)
+          (is (= [1 2 3] (ldk/array->vec xs)))
+          (is (= [3 1 2] (vec in)) "Java sorting its array leaves the int-array alone"))))))
+
+(deftest array-primitive-refusals
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))
+          read (fn [method desc] (ldk/with-ref [a (ldk/call-static "Fixture" method desc)]
+                                   (msg (fn [] (ldk/array->primitive a)))))]
+      (is (= "jolt-openldk: array->primitive takes a numeric array; use array->vec for a char[]"
+             (read "letters" "()[C")))
+      (is (= "jolt-openldk: array->primitive takes a numeric array; use array->vec for a boolean[]"
+             (read "flags" "()[Z")))
+      (is (= "jolt-openldk: array->primitive takes a numeric array, not a [Ljava.lang.String;"
+             (read "names" "()[Ljava/lang/String;")))
+      (ldk/with-ref [xs (ldk/new-object "java.util.ArrayList" "()V")]
+        (is (re-find #"not an array" (msg #(ldk/array->primitive xs))))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)
