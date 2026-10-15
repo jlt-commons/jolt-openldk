@@ -517,7 +517,7 @@
           (is (= "mine" (ldk/call s "describe" "()Ljava/lang/String;")))
           (is (= 2.5 (ldk/call s "area" "()D")))))
       (testing "a bare name over several concrete overloads is refused, listing them"
-        (let [m (msg #(ldk/subclass "java.util.ArrayList" {"add" (fn [_ x] true)}))]
+        (let [m (msg #(ldk/subclass "java.util.ArrayList" {"add" (fn [_ _x] true)}))]
           (is (re-find #"add matches several methods of java.util.ArrayList" m))
           (is (re-find #"add\(Ljava/lang/Object;\)Z" m))
           (is (re-find #"add\(ILjava/lang/Object;\)V" m))))
@@ -528,7 +528,7 @@
             (is (= ["a"] @added)))))
       (testing "a bare name with abstract methods takes only those"
         (let [got (atom [])]
-          (ldk/with-ref [w (ldk/subclass "java.io.Writer" {"write" (fn [_ cbuf off len] (swap! got conj len))
+          (ldk/with-ref [w (ldk/subclass "java.io.Writer" {"write" (fn [_ _cbuf _off len] (swap! got conj len))
                                                            "flush" (fn [_]) "close" (fn [_])})]
             (ldk/call w "write" "(Ljava/lang/String;)V" "xyz")
             (is (= [3] @got) "write(String) stayed Writer's and called write(char[], int, int)"))))
@@ -553,7 +553,7 @@
           (is (ldk/ref? h) "a public constructor of the same class is fine")))
       (testing "one generated class per superclass and set of methods"
         (let [names (fn [m] (ldk/with-ref [o (ldk/subclass "java.util.AbstractList" m)] (ldk/class-name o)))]
-          (is (= (names {"get" (fn [_ i] i) "size" (fn [_] 0)}) (names {"get" (fn [_ i] 0) "size" (fn [_] 1)})))
+          (is (= (names {"get" (fn [_ i] i) "size" (fn [_] 0)}) (names {"get" (fn [_ _i] 0) "size" (fn [_] 1)})))
           (is (not= (names {"get" (fn [_ i] i) "size" (fn [_] 0)})
                     (names {"get" (fn [_ i] i) "size" (fn [_] 0) "toString" (fn [_] "x")}))))))
     (testing "the bridge is still healthy after all of that"

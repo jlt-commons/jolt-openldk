@@ -688,6 +688,24 @@ define: its abstract methods and its superinterfaces', less Object's."
       (walk binary))
     (nreverse out)))
 
+(defun %ldk-method-gf (name desc)
+  "The generic function OpenLDK dispatches Java method NAME DESC through."
+  (intern (lispize-method-name (concatenate 'string name desc)) :openldk))
+
+(defun %ldk-define-upcall-methods (class-sym methods this-first)
+  "For each (name desc) in METHODS, a method on its generic function,
+specialised on CLASS-SYM, that calls Clojure (%ldk-upcall), with this as the
+first argument when THIS-FIRST."
+  (loop for (name desc) in methods
+        for gf = (%ldk-method-gf name desc)
+        for params = (loop for i below (length (%ldk-split-descriptor desc))
+                           collect (intern (format nil "P~D" i) :openldk))
+        do (unless (and (fboundp gf) (typep (fdefinition gf) 'generic-function))
+             (ensure-generic-function gf :generic-function-class 'java-generic-function
+                                         :lambda-list (cons '|this| params)))
+           (eval `(defmethod ,gf ((|this| ,class-sym) ,@params)
+                    (%ldk-upcall |this| ,name ,desc (list ,@params) ,this-first)))))
+
 (defun %ldk-proxy-class (interfaces)
   "The proxy class for INTERFACES (slashed names), made once and cached."
   (sb-thread:with-mutex (*ldk-proxy-lock*)
@@ -705,15 +723,7 @@ define: its abstract methods and its superinterfaces', less Object's."
                                (mapcar (lambda (i) (substitute #\. #\/ i)) interfaces))))
             (eval `(defmethod |toString()| ((|this| ,class-sym))
                      (jstring (format nil "~A #~D" ,label (slot-value |this| 'fn-id))))))
-          (loop for (name desc) in methods
-                for gf = (intern (lispize-method-name (concatenate 'string name desc)) :openldk)
-                for params = (loop for i below (length (%ldk-split-descriptor desc))
-                                   collect (intern (format nil "P~D" i) :openldk))
-                do (unless (and (fboundp gf) (typep (fdefinition gf) 'generic-function))
-                     (ensure-generic-function gf :generic-function-class 'java-generic-function
-                                                 :lambda-list (cons '|this| params)))
-                   (eval `(defmethod ,gf ((|this| ,class-sym) ,@params)
-                            (%ldk-upcall |this| ,name ,desc (list ,@params)))))
+          (%ldk-define-upcall-methods class-sym methods nil)
           (setf (gethash interfaces *ldk-proxy-classes*) class-sym)))))
 
 (defun %ldk-new-proxy (interfaces fn-id)
@@ -737,6 +747,11 @@ define: its abstract methods and its superinterfaces', less Object's."
 (defun %ldk-flag-p (thing flag)
   (not (zerop (logand flag (slot-value thing 'access-flags)))))
 
+(defun %ldk-superclass-chain (binary)
+  "Class BINARY and its superclasses, nearest first, loaded."
+  (loop for c = (%ldk-class binary) then (and (super c) (%ldk-class (super c)))
+        while c collect c))
+
 (defun %ldk-class-method-table (binary)
   "Every instance method an object of class BINARY has, as a list of
 (key name desc method) with the most specific declaration first per key, the
@@ -750,8 +765,7 @@ up; an interface method no class or default implements stays abstract."
                  (unless (gethash key seen)
                    (setf (gethash key seen) t)
                    (push (list key (name m) (descriptor m) m) out))))))
-      (let ((chain (loop for c = (%ldk-class binary) then (and (super c) (%ldk-class (super c)))
-                         while c collect c)))
+      (let ((chain (%ldk-superclass-chain binary)))
         (dolist (c chain)
           (loop for m across (slot-value c 'methods) do (note m)))
         (labels ((walk (name)
@@ -764,8 +778,7 @@ up; an interface method no class or default implements stays abstract."
 
 (defun %ldk-static-method-named (binary name desc)
   "A static method NAME (with DESC, when given) on BINARY or a superclass."
-  (loop for c = (%ldk-class binary) then (and (super c) (%ldk-class (super c)))
-        while c
+  (loop for c in (%ldk-superclass-chain binary)
         thereis (find-if (lambda (m) (and (static-p m) (string= (name m) name)
                                           (or (null desc) (string= (descriptor m) desc))))
                          (slot-value c 'methods))))
@@ -823,15 +836,7 @@ nothing overridable, or a bare name matching several overloads."
             ;; this one.
             (setf (gethash (symbol-name class-sym) *java-classes-by-bin-name*)
                   (%get-java-class-by-bin-name binary t))
-            (loop for (name desc) in methods
-                  for gf = (intern (lispize-method-name (concatenate 'string name desc)) :openldk)
-                  for params = (loop for i below (length (%ldk-split-descriptor desc))
-                                     collect (intern (format nil "P~D" i) :openldk))
-                  do (unless (and (fboundp gf) (typep (fdefinition gf) 'generic-function))
-                       (ensure-generic-function gf :generic-function-class 'java-generic-function
-                                                   :lambda-list (cons '|this| params)))
-                     (eval `(defmethod ,gf ((|this| ,class-sym) ,@params)
-                              (%ldk-upcall |this| ,name ,desc (list ,@params) t))))
+            (%ldk-define-upcall-methods class-sym methods t)
             (setf (gethash class-sym *ldk-subclass-supers*) binary)
             (setf (gethash cache-key *ldk-subclass-classes*) class-sym))))))
 
@@ -848,13 +853,8 @@ nothing overridable, or a bare name matching several overloads."
       (when (%ldk-flag-p ctor #x2) (error "constructor ~A of ~A is private" desc dotted)))
     (let* ((args (%ldk-args desc values))
            (class-sym (%ldk-subclass-class binary (%ldk-subclass-methods binary keys)))
-           (object (make-instance class-sym :fn-id fn-id))
-           (java-class (%get-java-class-by-bin-name binary t)))
-      (when (and java-class (slot-exists-p object '|clazz|))
-        (setf (slot-value object '|clazz|) java-class))
-      (invoke-special (intern (%ldk-method-key "<init>" desc) :openldk)
-                      (%ldk-class-symbol binary)
-                      (cons object args))
+           (object (make-instance class-sym :fn-id fn-id)))
+      (%ldk-construct object binary (%ldk-class-symbol binary) desc args)
       (list :ref (%ldk-handle object) (%ldk-class-dotted object)))))
 
 (defun %ldk-call-super (object name desc values)
@@ -870,7 +870,7 @@ through invoke-special so its override is skipped."
       (when (abstract-p (fourth entry)) (error "~A~A is abstract in ~A" name desc dotted))
       (let ((args (%ldk-args desc values)))
         (%ldk-result (nth-value 1 (%ldk-split-descriptor desc))
-                     (invoke-special (intern (lispize-method-name (concatenate 'string name desc)) :openldk)
+                     (invoke-special (%ldk-method-gf name desc)
                                      (%ldk-class-symbol binary)
                                      (cons object args)))))))
 
@@ -960,18 +960,21 @@ take this."
     (%ldk-result (nth-value 1 (%ldk-split-descriptor desc))
                  (apply gf (%box-if-native receiver) args))))
 
+(defun %ldk-construct (object binary owner desc args)
+  "Run constructor DESC of class OWNER (a CLOS class symbol) on OBJECT, a
+fresh instance whose Java class is BINARY's."
+  (let ((java-class (%get-java-class-by-bin-name binary t)))
+    (when (and java-class (slot-exists-p object '|clazz|))
+      (setf (slot-value object '|clazz|) java-class)))
+  (invoke-special (intern (%ldk-method-key "<init>" desc) :openldk) owner (cons object args)))
+
 (defun %ldk-new (classname desc values)
   (let* ((binary (substitute #\/ #\. classname))
          (args (%ldk-args desc values))
          (class (%ldk-class binary))
-         (object (%make-java-instance binary))
-         (java-class (%get-java-class-by-bin-name binary t)))
+         (object (%make-java-instance binary)))
     (declare (ignore class))
-    (when (and java-class (slot-exists-p object '|clazz|))
-      (setf (slot-value object '|clazz|) java-class))
-    (invoke-special (intern (%ldk-method-key "<init>" desc) :openldk)
-                    (class-name (class-of object))
-                    (cons object args))
+    (%ldk-construct object binary (class-name (class-of object)) desc args)
     (list :ref (%ldk-handle object) (substitute #\. #\/ binary))))
 
 (defun %ldk-main (classname args)
