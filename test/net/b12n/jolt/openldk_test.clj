@@ -453,9 +453,14 @@
         (is (re-find #"^jolt-openldk proxy for java.lang.Runnable"
                      (ldk/call-static "java.lang.String" "valueOf" "(Ljava/lang/Object;)Ljava/lang/String;" r))
             "Java's own String.valueOf, which calls toString")
-        (is (re-find #"ClassNotFoundException"
-                     (ex-message (thrown #(ldk/call r "getClass" "()Ljava/lang/Class;"))))
-            "getClass() is the documented gap")))
+        (is (re-find #"^java.lang.Object:jolt-openldk proxy for java.lang.Runnable #\d+$"
+                     (ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;" r))
+            "getClass() answers, with Object")))
+    (testing "a default inherited through one path beats the abstract method it overrides on another"
+      (ldk/with-ref [lk (ldk/implement "Fixture$LK" (fn [] 0))]
+        (is (= 42 (ldk/call-static "Fixture" "callN" "(LFixture$J;)I" lk))))
+      (ldk/with-ref [lk (ldk/implement ["Fixture$L" "Fixture$K"] (fn [] 0))]
+        (is (= 42 (ldk/call-static "Fixture" "callN" "(LFixture$J;)I" lk)))))
     (testing "only interfaces can be implemented"
       (is (re-find #"is a class, not an interface"
                    (ex-message (thrown #(ldk/implement "java.util.ArrayList" (fn [] nil)))))))))
