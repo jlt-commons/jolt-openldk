@@ -77,7 +77,8 @@
 ;; Java makes into Clojure. A proxy names its fn by id. A fn that throws leaves
 ;; its throwable here under an error id that Java's RuntimeException carries in
 ;; its message, so when that exception comes back out through a call, the
-;; original is rethrown. The table keeps the newest 256, because Java may
+;; original is rethrown, or becomes the cause of the wrapper Java put around
+;; it. The table keeps the newest 256, because Java may
 ;; swallow the exception and never bring it back.
 
 (def ^:private error-table-bound 256)
@@ -148,12 +149,15 @@
 
 (defn- rethrow-original
   "If `e` is the very RuntimeException a callback's throw turned into, the
-  original Clojure throwable, still in the error table; otherwise `e`. Java
-  wrapping it in another exception, even one quoting its message, keeps `e`."
+  original Clojure throwable, still in the error table. If Java wrapped that
+  RuntimeException, `e` with the original as its cause. Otherwise `e`. A
+  wrapper that only quotes the message gets no cause."
   [e]
-  (let [{:java/keys [class message]} (ex-data e)]
+  (let [{:java/keys [class message] cause-id :openldk/callback-error :as data} (ex-data e)]
     (or (when (= "java.lang.RuntimeException" class)
           (some-> (wire/callback-error-id message) take-error!))
+        (when cause-id
+          (ex-info (ex-message e) (dissoc data :openldk/callback-error) (take-error! cause-id)))
         e)))
 
 (defn- copy-raw

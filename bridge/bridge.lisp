@@ -35,7 +35,9 @@
 ;;; in, the same plus (:ref id "class") and (:void) on the way out. A
 ;;; (:raw-array ...) names elements the client wrote into its own memory, read
 ;;; before the call returns (%ldk-raw-values). A Java exception is
-;;; (:throw "java.lang.Class" "message"|:null "toString()").
+;;; (:throw "java.lang.Class" "message"|:null "toString()"), with a fifth
+;;; element, a callback's error id, when one of its causes is the
+;;; RuntimeException a callback's throw became (%ldk-callback-cause-id).
 
 (in-package :openldk)
 
@@ -345,7 +347,7 @@ made for them, released once Clojure has replied. :none outside a callback.")
 scalar becomes the box Java would give it (an integer is a Long, or an
 Integer for an Integer parameter) and a string a java.lang.String, so it can
 only go where that class fits. Any other reference parameter takes a JavaRef
-or nil. A JavaRef's class is not checked against the parameter's here.")
+or nil, and %ldk-ref-arg checks the JavaRef's class.")
 
 (defun %ldk-noun (tag)
   (case tag
@@ -406,6 +408,22 @@ or nil. A JavaRef's class is not checked against the parameter's here.")
     (:z (%ldk-call-static "java/lang/Boolean" "valueOf(Z)" (ecase (second value) (:true 1) (:false 0))))
     (:c (%ldk-call-static "java/lang/Character" "valueOf(C)" (%ldk-wire-char value)))))
 
+(defun %ldk-ref-arg (param object)
+  "OBJECT, a JavaRef's object, if Java's instanceof says it fits reference
+parameter PARAM. Arrays follow Java's covariance (a String[] is an Object[],
+an int[] is not). A class that cannot be loaded is left to the call to report."
+  (let ((fits (if (char= (char param 0) #\[)
+                  (%array-assignable-to-p object param)
+                  (let ((binary (subseq param 1 (1- (length param)))))
+                    (or (string= binary "java/lang/Object")
+                        (null (classload binary))
+                        (eql 1 (%instanceof-check object binary
+                                                  (intern binary (class-package binary)))))))))
+    (unless fits
+      (error "a ~A for ~:[~;array ~]parameter ~A"
+             (%ldk-class-dotted object) (char= (char param 0) #\[) param))
+    object))
+
 (defun %ldk-arg (param value)
   "Turn wire VALUE into what OpenLDK passes for a parameter of type PARAM."
   (let ((tag (if (member (first value) '(:nan :inf)) :d (first value))))
@@ -417,14 +435,11 @@ or nil. A JavaRef's class is not checked against the parameter's here.")
              (:null nil)
              (:array (%ldk-make-array (subseq param 1) (second value)))
              (:raw-array (%ldk-make-array (subseq param 1) value))
-             (:ref (let ((object (%ldk-deref (second value))))
-                     (unless (java-array-p object)
-                       (error "a ~A for array parameter ~A" (%ldk-class-dotted object) param))
-                     object))
+             (:ref (%ldk-ref-arg param (%ldk-deref (second value))))
              (t (error "~A for array parameter ~A" (%ldk-noun tag) param))))
       (#\L (case tag
              (:null nil)
-             (:ref (%ldk-deref (second value)))
+             (:ref (%ldk-ref-arg param (%ldk-deref (second value))))
              (t (%ldk-boxed-arg param tag value))))
       (t (%ldk-primitive-arg param tag value)))))
 
@@ -847,13 +862,31 @@ among ARGS reach Clojure as borrowed handles, released when it replies."
       (:proxy (destructuring-bind (interfaces fn-id) rest
                 (%ldk-new-proxy interfaces fn-id))))))
 
+(defun %ldk-callback-cause-id (throwable)
+  "The error id of the first of THROWABLE's causes that is the RuntimeException
+a callback's throw became (%ldk-upcall), or NIL. THROWABLE itself is not
+looked at: the client already knows that case by its class and message."
+  (let ((marker "[jolt-openldk callback error "))
+    (loop repeat 64
+          for cause = (|getCause()| throwable) then (|getCause()| cause)
+          while cause
+          do (let* ((m (and (string= (%ldk-class-dotted cause) "java.lang.RuntimeException")
+                            (|getMessage()| cause)))
+                    (text (and m (%ldk-lstring m)))
+                    (at (and text (search marker text :from-end t))))
+               (when (and at (char= #\] (char text (1- (length text)))))
+                 (let ((id (ignore-errors
+                            (parse-integer text :start (+ at (length marker)) :end (1- (length text))))))
+                   (when id (return id))))))))
+
 (defun %ldk-throwable-reply (condition)
   (let ((throwable (and (slot-boundp condition '|objref|) (slot-value condition '|objref|))))
     (if throwable
-        (list :throw
-              (%ldk-class-dotted throwable)
-              (let ((m (|getMessage()| throwable))) (if m (%ldk-lstring m) :null))
-              (%ldk-lstring (|toString()| throwable)))
+        (list* :throw
+               (%ldk-class-dotted throwable)
+               (let ((m (|getMessage()| throwable))) (if m (%ldk-lstring m) :null))
+               (%ldk-lstring (|toString()| throwable))
+               (let ((id (%ldk-callback-cause-id throwable))) (and id (list id))))
         (list :throw "java.lang.Throwable" :null (format nil "~A" condition)))))
 
 (defun %ldk-read-request (text)

@@ -64,6 +64,14 @@ public class Fixture {
         try { r.run(); }
         catch (RuntimeException e) { throw new IllegalStateException("wrapped: " + e.getMessage(), e); }
     }
+    public static void wrapTwice(Runnable r) {
+        try { wrap(r); }
+        catch (IllegalStateException e) { throw new UnsupportedOperationException("outer", e); }
+    }
+    public static void quote(Runnable r) {
+        try { r.run(); }
+        catch (RuntimeException e) { throw new IllegalStateException("quoted: " + e.getMessage()); }
+    }
     public static String tryInt(java.util.function.IntSupplier s) {
         try { return "got " + s.getAsInt(); }
         catch (RuntimeException e) { return "caught: " + e.getMessage(); }
