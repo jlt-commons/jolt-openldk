@@ -192,7 +192,7 @@ A fn handles every method, which suits a functional interface. A map picks a fn 
 - Arguments arrive converted like returned values. Objects among them are JavaRefs **borrowed for the call**: they're released when the fn returns, so copy out what you need first.
 - The result converts by the method's return type, the same way an argument would, and a void method ignores it. A result that doesn't fit is a `RuntimeException` in Java, which Java code can catch.
 - Objects the fn gets from its own calls into Java are ordinary JavaRefs it can keep. Only the arguments are borrowed.
-- If the fn throws, Java gets a `RuntimeException` with its message. If that exception comes back out through the call you made, you get your original throwable back. If Java wrapped it first, as the cause of another exception, you get the wrapper as an `ex-info` with your original as its `ex-cause`. A wrapper that only copies the message has no cause, so you get it alone.
+- If the fn throws, Java gets a `RuntimeException` with its message. If that exception comes back out through the call you made, you get your original throwable back. If Java wrapped it first, as the cause of another exception, you get the wrapper as an `ex-info` with your original as its `ex-cause`. A wrapper of another class that only copies the message has no cause, so you get it alone.
 - The fn may call into Java on the same thread. Java threads can call in too. Every call from Clojure into Java takes one lock, so a fn on another Java thread that calls into Java waits until your thread's current call finishes. That's a deadlock only when your call is itself waiting for that Java thread, through `join`, a latch or a monitor. In that case the fn must not call into Java.
 - `toString` gives `jolt-openldk proxy for java.util.Comparator #7`, and `hashCode` and `equals` are Object's. None of the three reach Clojure. `getClass()` throws `ClassNotFoundException`, since no Java class stands behind the one made at run time, so Java code that reflects on the object will fail.
 - Like any JavaRef, the object lives until `release!`, along with its fn. A proxy passed inline and never released stays for the life of the process.
@@ -314,7 +314,7 @@ The missing-coordinate test in the bake tests contacts Clojars and Maven Central
 
 The patches tests check the two JIT and jmod fixes in `bridge/bridge.lisp` (the OpenLDK tests check the string, `NativeLibraries.load`, zlib and `getNanoTimeAdjustment` fixes), each in a jolt subprocess that a watchdog kills after two minutes, since one of them is about a call that never returned. The jmod check needs a JDK with `jmods/java.prefs.jmod` and skips without one, as on CI's Temurin.
 
-Last run, 2026-10-15: wire tests 16 tests and 99 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 32 tests and 277 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
+Last run, 2026-10-15: wire tests 16 tests and 99 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 32 tests and 282 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
 
 ## Licence
 
