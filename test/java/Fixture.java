@@ -101,6 +101,13 @@ public class Fixture {
         public static int count() { return 0; }
         public String describe() { return kind() + " of area " + area(); }
     }
+    public static abstract class Greeter {
+        private final String greeting;
+        protected Greeter() { greeting = greet(); }
+        public abstract String greet();
+        public String greeting() { return greeting; }
+    }
+    public static String startJoin(Thread t) throws InterruptedException { t.start(); t.join(); return t.getName(); }
     public static final class Sealed {}
     public static class Hidden { private Hidden() {} public Hidden(int x) {} }
 
