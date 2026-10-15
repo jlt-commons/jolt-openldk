@@ -314,7 +314,7 @@ The missing-coordinate test in the bake tests contacts Clojars and Maven Central
 
 The patches tests check the two JIT and jmod fixes in `bridge/bridge.lisp` (the OpenLDK tests check the string, `NativeLibraries.load`, zlib and `getNanoTimeAdjustment` fixes), each in a jolt subprocess that a watchdog kills after two minutes, since one of them is about a call that never returned. The jmod check needs a JDK with `jmods/java.prefs.jmod` and skips without one, as on CI's Temurin.
 
-Last run, 2026-10-15: wire tests 16 tests and 98 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 31 tests and 274 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
+Last run, 2026-10-15: wire tests 16 tests and 99 assertions, project tests 21 tests and 30 assertions, maven tests 9 tests and 46 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 32 tests and 277 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
 
 ## Licence
 

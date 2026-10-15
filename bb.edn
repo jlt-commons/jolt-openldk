@@ -28,7 +28,7 @@
                         ["gates" "lint, test with the build required, tour"]
                         ["linux" "build and test on Linux in Docker (linux/Dockerfile), this machine's architecture; slow, not in gates"]
                         ["bench-arrays" "time a million-element primitive array crossing each way (needs a build); not in gates"]]]
-           (println (format "  bb %-6s %s" t d)))}
+           (println (format "  bb %-13s%s" t d)))}
 
   build
   {:doc "Build into $JOLT_OPENLDK_HOME/dist (default ~/.cache/jolt-openldk/dist)"

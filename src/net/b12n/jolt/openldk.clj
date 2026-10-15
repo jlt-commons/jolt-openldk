@@ -23,8 +23,8 @@
   primitive array's elements cross as raw memory rather than text. Every other
   object, returned arrays included, comes back as a JavaRef, a handle that
   keeps the object alive until `release!`; read an array with `array->vec`, or
-  a numeric one with `array->primitive`. A Java exception is an ex-info with :java/class, :java/message
-  and :java/string.
+  a numeric one with `array->primitive`. A Java exception is an ex-info with
+  :java/class, :java/message and :java/string.
 
   One OpenLDK per process, set up once with one classpath, and no shutdown.
   Calls are serialised: OpenLDK's own thread-safety is not established, so
@@ -162,24 +162,28 @@
 
 (defn- copy-raw
   "The elements a wire/RawReply names, copied into a fresh jolt typed array,
-as {:component letter :data array}. The bridge malloc'd them for this caller,
-so the memory is freed here whatever happens to the copy."
+as {:component letter :data array}. The bridge malloc'd them for this caller
+(an empty array comes at address 0), so the memory is freed here whatever
+happens to the copy, a reply this code can't read included."
   [{:keys [component address length]}]
-  (if (zero? length)
-    {:component component
-     :data (case component
-             ("Z" "B") (byte-array 0) ("C" "S") (short-array 0) "I" (int-array 0)
-             "J" (long-array 0) "F" (float-array 0) "D" (double-array 0))}
+  (let [unknown #(throw (ex-info (str "jolt-openldk: a raw reply with unknown component " component)
+                                 {:component component}))]
     (try
       {:component component
-       :data (case component
-               ("Z" "B") (ffi/read-array address length)
-               ("C" "S") (ffi/read-array address :int16 length)
-               "I" (ffi/read-array address :int32 length)
-               "J" (ffi/read-array address :int64 length)
-               "F" (ffi/read-array address :float length)
-               "D" (ffi/read-array address :double length))}
-      (finally (ldk-free address)))))
+       :data (if (zero? length)
+               (case component
+                 ("Z" "B") (byte-array 0) ("C" "S") (short-array 0) "I" (int-array 0)
+                 "J" (long-array 0) "F" (float-array 0) "D" (double-array 0)
+                 (unknown))
+               (case component
+                 ("Z" "B") (ffi/read-array address length)
+                 ("C" "S") (ffi/read-array address :int16 length)
+                 "I" (ffi/read-array address :int32 length)
+                 "J" (ffi/read-array address :int64 length)
+                 "F" (ffi/read-array address :float length)
+                 "D" (ffi/read-array address :double length)
+                 (unknown)))}
+      (finally (when-not (zero? address) (ldk-free address))))))
 
 (defn- send!
   "One request across, one reply back, decoded. `request` is the request text,
@@ -496,9 +500,10 @@ so the memory is freed here whatever happens to the copy."
   "The elements of numeric Java array `arr` as a fresh jolt typed array:
   byte[] to a byte-array, short[] to a short-array, int[] to an int-array,
   long[] to a long-array, float[] to a float-array, double[] to a
-  double-array. A copy: changing it doesn't change the Java array. char[] and
-  boolean[] are refused, since a jolt char can't hold half a surrogate pair;
-  array->vec reads them as fast."
+  double-array. A copy: changing it doesn't change the Java array. char[] is
+  refused, since a jolt char can't hold half a surrogate pair, and boolean[]
+  too, since no jolt typed array holds booleans; array->vec reads both as
+  fast."
   [arr]
   (let [cls (class-name arr)]
     (cond

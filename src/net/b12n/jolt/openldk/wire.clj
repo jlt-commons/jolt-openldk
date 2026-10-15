@@ -188,9 +188,15 @@
   "A callback's result. A void method's result is ignored rather than encoded,
   so a fn may return anything there."
   [descriptor v]
-  (if (str/ends-with? descriptor ")V")
-    "(:ok (:void))"
-    (str "(:ok " (value->lisp v) ")")))
+  (cond
+    (str/ends-with? descriptor ")V") "(:ok (:void))"
+    ;; value->lisp's own refusal is worded for an argument, not a result.
+    (primitive-array-kind v)
+    (throw (ex-info (str "jolt-openldk: a callback cannot return a jolt "
+                         (name (primitive-array-kind v))
+                         "-array; return a vector, or a JavaRef from new-array")
+                    {:value v}))
+    :else (str "(:ok " (value->lisp v) ")")))
 
 (defn throw-reply
   "Tell Java the callback threw: it raises a RuntimeException carrying

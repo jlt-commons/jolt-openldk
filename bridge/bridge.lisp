@@ -474,9 +474,11 @@ an int[] is not). A class that cannot be loaded is left to the call to report."
   "The N elements a (:raw-array CARRIER ADDRESS N) value names, as the wire
 values the text path would have sent for them, so %ldk-make-array checks them
 and words its errors exactly as it does for a vector. The client never
-narrows a value before the check: integers go as int64 or a typed array's own
-width, floating values as float64, chars as int32 code points. :f32 is read
-too, though the client widens a float-array to :f64."
+narrows a value before the check. The carriers: :i8 :i16 :i32 :i64 signed
+integers (a vector's integers as :i64, a typed array's at its own width),
+:f64 doubles (a float-array is widened to it), :f32 floats (read, though the
+client doesn't send it), :z8 booleans as 0 or not, :c32 chars as int32 code
+points."
   (unless (and (integerp n) (>= n 0))
     (error "a raw array needs a length of 0 or more, got ~D" n))
   (when (and (plusp n) (eql address 0))
