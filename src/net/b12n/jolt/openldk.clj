@@ -533,6 +533,19 @@ happens to the copy, a reply this code can't read included."
 
 ;; --- Java calling Clojure ---------------------------------------------------------------
 
+(defn- with-callback
+  "Register `impl` under a new fn id, send `(request id)`, and return the
+  JavaRef it answers, carrying the id so release! drops `impl`. The
+  registration goes again if the request throws."
+  [impl request]
+  (let [id (swap! next-id inc)]
+    (swap! fns assoc id impl)
+    (try
+      (assoc (send! (request id)) :fn-id id)
+      (catch Throwable t
+        (swap! fns dissoc id)
+        (throw t)))))
+
 (defn implement
   "A Java object implementing `interfaces` (one name, or a vector of them) whose
   methods call Clojure, as a JavaRef to pass wherever Java wants one.
@@ -555,14 +568,8 @@ happens to the copy, a reply this code can't read included."
   another thread while this one waits inside a call must not call into Java:
   calls take one lock, and the waiting call holds it."
   [interfaces impl]
-  (let [ifaces (if (string? interfaces) [interfaces] (vec interfaces))
-        id (swap! next-id inc)]
-    (swap! fns assoc id impl)
-    (try
-      (assoc (send! (wire/proxy-request ifaces id)) :fn-id id)
-      (catch Throwable t
-        (swap! fns dissoc id)
-        (throw t)))))
+  (let [ifaces (if (string? interfaces) [interfaces] (vec interfaces))]
+    (with-callback impl (fn [id] (wire/proxy-request ifaces id)))))
 
 (defn subclass
   "A Java object of a subclass of `class-name` made at run time, whose methods
@@ -591,16 +598,10 @@ happens to the copy, a reply this code can't read included."
   ([class-name ctor-descriptor ctor-args methods]
    (when-not (and (map? methods) (every? string? (keys methods)) (every? fn? (vals methods)))
      (throw (ex-info "jolt-openldk: subclass takes a map of method names to fns" {:methods methods})))
-   (let [id (swap! next-id inc)]
-     (swap! fns assoc id methods)
-     (try
-       (assoc (send! (fn [a] (wire/subclass-request (dotted class-name) ctor-descriptor
-                                                     (stage-args a ctor-descriptor ctor-args)
-                                                     id (keys methods))))
-              :fn-id id)
-       (catch Throwable t
-         (swap! fns dissoc id)
-         (throw t))))))
+   (with-callback methods
+     (fn [id] (fn [a] (wire/subclass-request (dotted class-name) ctor-descriptor
+                                             (stage-args a ctor-descriptor ctor-args)
+                                             id (keys methods)))))))
 
 (defn call-super
   "Call the superclass's version of instance `method` on `obj`, an object
