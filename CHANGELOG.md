@@ -6,6 +6,14 @@
   default method overrides an abstract one inherited along another path, as
   in `interface LK extends L, K` where `K` gives `n()` a default, the default
   now runs. Before, the abstract method won and Java got the proxy's stub.
+  An abstract method and an unrelated interface's default under the same key
+  also resolve to the default now, as the JVM's own method selection does.
+
+- An interface that redeclares a method with a narrower return type, such as
+  `String get()` over `Object get()`, no longer crashes the host when Java
+  calls it on a proxy, or on a `subclass` object that leaves it unmapped.
+  javac adds a bridge method under the same key, and the bridge was taken
+  for the implementation, so it called itself until SBCL died.
 
 - `getClass()` on a proxy answers with `Object`'s `Class` instead of throwing
   `ClassNotFoundException`.

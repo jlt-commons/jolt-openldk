@@ -461,6 +461,9 @@
         (is (= 42 (ldk/call-static "Fixture" "callN" "(LFixture$J;)I" lk))))
       (ldk/with-ref [lk (ldk/implement ["Fixture$L" "Fixture$K"] (fn [] 0))]
         (is (= 42 (ldk/call-static "Fixture" "callN" "(LFixture$J;)I" lk)))))
+    (testing "a covariant redeclaration reaches the fn, not javac's bridge method"
+      (ldk/with-ref [g (ldk/implement "Fixture$StrGetter" (fn [] "got"))]
+        (is (= "got" (ldk/call-static "Fixture" "callGet" "(LFixture$Getter;)Ljava/lang/Object;" g)))))
     (testing "only interfaces can be implemented"
       (is (re-find #"is a class, not an interface"
                    (ex-message (thrown #(ldk/implement "java.util.ArrayList" (fn [] nil)))))))))
@@ -548,6 +551,12 @@
       (testing "a default method beats the abstract declaration it overrides, whatever the walk order"
         (ldk/with-ref [o (ldk/subclass "Fixture$Both" {})]
           (is (= 42 (ldk/call-static "Fixture" "callN" "(LFixture$J;)I" o)))))
+      (testing "a covariant redeclaration in an interface reaches the fn, not javac's bridge method"
+        (ldk/with-ref [o (ldk/subclass "Fixture$Strs" {"get" (fn [_] "got")})]
+          (is (= "got" (ldk/call-static "Fixture" "callGet" "(LFixture$Getter;)Ljava/lang/Object;" o))))
+        (ldk/with-ref [o (ldk/subclass "Fixture$Strs" {})]
+          (is (re-find #"no fn for get\(\)Ljava/lang/String;"
+                       (str (:java/message (ex-data (thrown #(ldk/call-static "Fixture" "callGet" "(LFixture$Getter;)Ljava/lang/Object;" o)))))))))
       (testing "a superclass's private method doesn't implement an interface method"
         (ldk/with-ref [o (ldk/subclass "Fixture$X" {"m" (fn [_] 7)})]
           (is (= 7 (ldk/call-static "Fixture" "callM" "(LFixture$I;)I" o))))

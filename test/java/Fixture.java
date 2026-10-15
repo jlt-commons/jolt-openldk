@@ -114,6 +114,11 @@ public class Fixture {
     public interface L extends J {}
     public static abstract class Both implements L, K {}
     public interface LK extends L, K {}
+    // A covariant redeclaration: javac adds a bridge default get()Object to StrGetter.
+    public interface Getter { Object get(); }
+    public interface StrGetter extends Getter { String get(); }
+    public static Object callGet(Getter g) { return g.get(); }
+    public static abstract class Strs implements StrGetter {}
     public static int callN(J j) { return j.n(); }
     // A private superclass method doesn't implement an interface method.
     public static class Y { private int m() { return 1; } }

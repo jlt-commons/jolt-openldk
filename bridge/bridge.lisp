@@ -769,11 +769,20 @@ one it overrides, and the key is abstract only if what remains is."
       (dolist (n (cons i (%ldk-superinterfaces i)))
         (pushnew n all :test #'string=)))
     (dolist (iname (reverse all))
-      (loop for m across (slot-value (%ldk-class iname) 'methods)
-            for key = (%ldk-method-key (name m) (descriptor m))
-            when (and (%ldk-instance-method-p m) (not (gethash key seen)))
-              do (unless (gethash key candidates) (push key order))
-                 (push (cons iname m) (gethash key candidates))))
+      (let ((methods (slot-value (%ldk-class iname) 'methods)))
+        (flet ((key-of (m) (%ldk-method-key (name m) (descriptor m))))
+          (loop for m across methods
+                for key = (key-of m)
+                when (and (%ldk-instance-method-p m) (not (gethash key seen))
+                          ;; A covariant redeclaration comes with javac's bridge
+                          ;; method, a default under the same key that calls the
+                          ;; real one; picked, it would call itself.
+                          (not (and (%ldk-flag-p m #x40)
+                                    (find-if (lambda (o) (and (not (%ldk-flag-p o #x40))
+                                                              (string= (key-of o) key)))
+                                             methods))))
+                  do (unless (gethash key candidates) (push key order))
+                     (push (cons iname m) (gethash key candidates))))))
     (dolist (key (reverse order))
       (let* ((cands (gethash key candidates))
              ;; Drop a declaration some other candidate's interface overrides.
