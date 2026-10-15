@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- jolt 0.8.22 or later is required, and CI tests it. It's the release that
+  lets the next two things happen.
+
+- A coordinate under `:jolt-openldk/deps` now brings in its own dependencies,
+  read from its POM (compile and runtime scope, optional ones skipped),
+  through jolt.deps' new `:jvm-deps?` option. `httpclient` 4.5.14 now brings
+  `httpcore`, `commons-logging` and `commons-codec` with it. A coordinate may
+  carry `:exclusions [group/artifact ...]` to leave some out.
+
+- A `float-array` passed for a `float[]` crosses as 4-byte floats again,
+  rather than widened to doubles for jolt 0.8.20's sake. The values are the
+  same.
+
+- Runaway recursion in a callback is now a `StackOverflowError` (jolt 0.8.22),
+  not heap exhaustion. Java gets a `RuntimeException` it can catch, and a call
+  from Clojure rethrows the original. `bb test` sets `JOLT_STACK_LIMIT=256m` so
+  the test for it ends quickly.
+
 - A callback that returns a jolt typed array (`int-array` ...) now gets an
   error saying to return a vector or a JavaRef from `new-array`, instead of
   one worded for an argument. A `:raw` reply the client can't read is now an
