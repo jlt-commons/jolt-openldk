@@ -752,29 +752,69 @@ first argument when THIS-FIRST."
   (loop for c = (%ldk-class binary) then (and (super c) (%ldk-class (super c)))
         while c collect c))
 
+(defun %ldk-superinterfaces (name)
+  "Every interface interface NAME extends, directly or not, by binary name."
+  (let ((out '()))
+    (labels ((walk (n)
+               (loop for super across (or (slot-value (%ldk-class n) 'interfaces) #())
+                     unless (member super out :test #'string=)
+                       do (push super out) (walk super))))
+      (walk name))
+    out))
+
 (defun %ldk-class-method-table (binary)
   "Every instance method an object of class BINARY has, as a list of
-(key name desc method) with the most specific declaration first per key, the
-superclass chain walked before the interfaces. KEY is OpenLDK's method key.
-A default method is an implementation, so it hides an abstract one further
-up; an interface method no class or default implements stays abstract."
-  (let ((seen (make-hash-table :test 'equal)) (out '()))
-    (flet ((note (m)
-             (unless (or (static-p m) (char= (char (name m) 0) #\<))
-               (let ((key (%ldk-method-key (name m) (descriptor m))))
-                 (unless (gethash key seen)
-                   (setf (gethash key seen) t)
-                   (push (list key (name m) (descriptor m) m) out))))))
-      (let ((chain (%ldk-superclass-chain binary)))
+(key name desc method), one per KEY (OpenLDK's method key), the declaration
+that wins as in Java. The superclass chain comes first, nearest class winning.
+A key no class declares goes to the interfaces: a declaration in an interface
+that another declaring interface extends is overridden by it, so a default
+there beats the abstract one it overrides, and the key is abstract only if
+what remains is. Private methods are left out, since they override nothing
+and nothing overrides them."
+  (let ((seen (make-hash-table :test 'equal))
+        (out '())
+        (chain (%ldk-superclass-chain binary))
+        (candidates (make-hash-table :test 'equal))
+        (order '()))
+    (flet ((instance-method-p (m)
+             (not (or (static-p m) (char= (char (name m) 0) #\<) (%ldk-flag-p m #x2)))))
+      (dolist (c chain)
+        (loop for m across (slot-value c 'methods)
+              for key = (%ldk-method-key (name m) (descriptor m))
+              when (and (instance-method-p m) (not (gethash key seen)))
+                do (setf (gethash key seen) t)
+                   (push (list key (name m) (descriptor m) m) out)))
+      (let ((interfaces '()))
         (dolist (c chain)
-          (loop for m across (slot-value c 'methods) do (note m)))
-        (labels ((walk (name)
-                   (let ((i (%ldk-class name)))
-                     (loop for m across (slot-value i 'methods) do (note m))
-                     (loop for super across (or (slot-value i 'interfaces) #()) do (walk super)))))
-          (dolist (c chain)
-            (loop for i across (or (slot-value c 'interfaces) #()) do (walk i))))))
+          (loop for i across (or (slot-value c 'interfaces) #())
+                do (dolist (n (cons i (%ldk-superinterfaces i)))
+                     (pushnew n interfaces :test #'string=))))
+        (dolist (iname (reverse interfaces))
+          (loop for m across (slot-value (%ldk-class iname) 'methods)
+                for key = (%ldk-method-key (name m) (descriptor m))
+                when (and (instance-method-p m) (not (gethash key seen)))
+                  do (unless (gethash key candidates) (push key order))
+                     (push (cons iname m) (gethash key candidates))))
+        (dolist (key (reverse order))
+          (let* ((cands (gethash key candidates))
+                 ;; Drop a declaration some other candidate's interface overrides.
+                 (live (remove-if (lambda (c)
+                                    (some (lambda (other)
+                                            (and (not (eq other c))
+                                                 (member (car c) (%ldk-superinterfaces (car other))
+                                                         :test #'string=)))
+                                          cands))
+                                  cands))
+                 (pick (or (find-if-not (lambda (c) (abstract-p (cdr c))) live) (first live))))
+            (push (list key (name (cdr pick)) (descriptor (cdr pick)) (cdr pick)) out)))))
     (nreverse out)))
+
+(defun %ldk-private-method-named (binary name desc)
+  "A private method NAME (with DESC, when given) declared on BINARY or a superclass."
+  (loop for c in (%ldk-superclass-chain binary)
+        thereis (find-if (lambda (m) (and (%ldk-flag-p m #x2) (not (static-p m)) (string= (name m) name)
+                                          (or (null desc) (string= (descriptor m) desc))))
+                         (slot-value c 'methods))))
 
 (defun %ldk-static-method-named (binary name desc)
   "A static method NAME (with DESC, when given) on BINARY or a superclass."
@@ -789,12 +829,12 @@ abstract method, plus what each key names. Signals for a key that names
 nothing overridable, or a bare name matching several overloads."
   (let* ((table (%ldk-class-method-table binary))
          (dotted (substitute #\. #\/ binary))
-         (overridable (remove-if (lambda (e) (%ldk-flag-p (fourth e) (logior #x2 #x10))) table))
+         (overridable (remove-if (lambda (e) (%ldk-flag-p (fourth e) #x10)) table))
          (abstract (remove-if-not (lambda (e) (abstract-p (fourth e))) overridable))
          (chosen (copy-list abstract)))
-    (flet ((why-not (e)
-             (error "~A~A is ~:[final~;private~], so a subclass of ~A can't override it"
-                    (second e) (third e) (%ldk-flag-p (fourth e) #x2) dotted)))
+    (flet ((why-not (m what)
+             (error "~A~A is ~A, so a subclass of ~A can't override it"
+                    (name m) (descriptor m) what dotted)))
       (dolist (key keys)
         (let* ((open (position #\( key))
                (name (if open (subseq key 0 open) key))
@@ -811,11 +851,11 @@ nothing overridable, or a bare name matching several overloads."
             (open-named
              (error "~A matches several methods of ~A; pick one by descriptor: ~{~A~^, ~}"
                     name dotted (mapcar (lambda (e) (concatenate 'string (second e) (third e))) open-named)))
-            (named (why-not (first named)))
+            (named (why-not (fourth (first named)) "final"))
+            ((%ldk-private-method-named binary name desc)
+             (why-not (%ldk-private-method-named binary name desc) "private"))
             ((%ldk-static-method-named binary name desc)
-             (let ((m (%ldk-static-method-named binary name desc)))
-               (error "~A~A is static, so a subclass of ~A can't override it"
-                      (name m) (descriptor m) dotted)))
+             (why-not (%ldk-static-method-named binary name desc) "static"))
             (t (error "no method ~A on ~A" key dotted))))))
     (mapcar (lambda (e) (list (second e) (third e)))
             (remove-duplicates chosen :key #'first :test #'string= :from-end t))))
@@ -841,6 +881,9 @@ nothing overridable, or a bare name matching several overloads."
             (setf (gethash cache-key *ldk-subclass-classes*) class-sym))))))
 
 (defun %ldk-new-subclass (classname desc values fn-id keys)
+  (when (or (zerop (length classname)) (char= (char classname 0) #\[)
+            (assoc classname *ldk-primitive-names* :test #'string=))
+    (error "~A is not a class, so it can't be subclassed" classname))
   (let* ((binary (substitute #\/ #\. classname))
          (dotted (substitute #\. #\/ binary))
          (class (%ldk-class dotted)))

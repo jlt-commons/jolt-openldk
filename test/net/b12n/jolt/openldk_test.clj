@@ -492,7 +492,9 @@
                                         "flush" (fn [_])
                                         "close" (fn [_])})]
           (is (= "ok" (ldk/call-static "Fixture" "writeSome" "(Ljava/io/Writer;)Ljava/lang/String;" w)))
-          (is (= [\a \b \c \d] @got)))))
+          (is (= [\a \b \c \d] @got))
+          (is (true? (ldk/call-static "Fixture" "lockIsSelf" "(Ljava/io/Writer;)Z" w))
+              "Writer() ran and set lock to the object itself"))))
     (testing "Number: four abstract methods"
       (ldk/with-ref [n (ldk/subclass "java.lang.Number" {"intValue" (fn [_] 7) "longValue" (fn [_] 70)
                                                          "floatValue" (fn [_] 7.5) "doubleValue" (fn [_] 7.5)})]
@@ -538,6 +540,18 @@
         (is (re-find #"kind\(\)Ljava/lang/String; is final" (msg #(ldk/subclass "Fixture$Shape" {"kind" (fn [_] "x")}))))
         (is (re-find #"secret\(\)I is private" (msg #(ldk/subclass "Fixture$Shape" {"secret" (fn [_] 2)}))))
         (is (re-find #"count\(\)I is static" (msg #(ldk/subclass "Fixture$Shape" {"count" (fn [_] 2)})))))
+      (testing "a default method beats the abstract declaration it overrides, whatever the walk order"
+        (ldk/with-ref [o (ldk/subclass "Fixture$Both" {})]
+          (is (= 42 (ldk/call-static "Fixture" "callN" "(LFixture$J;)I" o)))))
+      (testing "a superclass's private method doesn't implement an interface method"
+        (ldk/with-ref [o (ldk/subclass "Fixture$X" {"m" (fn [_] 7)})]
+          (is (= 7 (ldk/call-static "Fixture" "callM" "(LFixture$I;)I" o))))
+        (ldk/with-ref [o (ldk/subclass "Fixture$X" {})]
+          (is (re-find #"no fn for m\(\)I"
+                       (str (:java/message (ex-data (thrown #(ldk/call-static "Fixture" "callM" "(LFixture$I;)I" o)))))))))
+      (testing "array and primitive names are refused"
+        (doseq [n ["int" "[I" "[Ljava.lang.Object;"]]
+          (is (re-find #"is not a class, so it can't be subclassed" (str (msg #(ldk/subclass n {})))) n)))
       (testing "a map with something other than string keys and fns"
         (is (re-find #"subclass takes a map of method names to fns" (msg #(ldk/subclass "java.util.TimerTask" {:run (fn [_])}))))
         (is (re-find #"subclass takes a map of method names to fns" (msg #(ldk/subclass "java.util.TimerTask" (fn [_]))))))
@@ -582,6 +596,10 @@
                        (msg #(ldk/call-super xs "toString" "()Ljava/lang/String;"))))
           (is (re-find #"no method nope\(\)V on java.util.AbstractList"
                        (msg #(ldk/call-super l "nope" "()V"))))
+          (ldk/with-ref [shape (ldk/subclass "Fixture$Shape" {"area" (fn [_] 1.0)})]
+            (is (re-find #"no method secret\(\)I on Fixture\$Shape"
+                         (msg #(ldk/call-super shape "secret" "()I")))
+                "a private method isn't the superclass's to call"))
           (is (re-find #"size\(\)I is abstract in java.util.AbstractList"
                        (msg #(ldk/call-super l "size" "()I"))))
           (is (:openldk/error (ex-data (thrown #(ldk/call-super l "size" "()I")))))
@@ -598,7 +616,8 @@
         (ldk/with-ref [t (ldk/subclass "java.lang.Thread" "(Ljava/lang/String;)V" ["worker-1"]
                                        {"run" (fn [this] (reset! ran [(ldk/ref? this) (.getName (Thread/currentThread))]))})]
           (is (= "worker-1" (ldk/call-static "Fixture" "startJoin" "(Ljava/lang/Thread;)Ljava/lang/String;" t)))
-          (is (true? (first @ran))))))
+          (is (true? (first @ran)))
+          (is (not= (.getName (Thread/currentThread)) (second @ran)) "run ran on the thread Java started"))))
     (testing "a superclass constructor that calls an override reaches the fn"
       (ldk/with-ref [g (ldk/subclass "Fixture$Greeter" {"greet" (fn [_] "hello")})]
         (is (= "hello" (ldk/call g "greeting" "()Ljava/lang/String;")))))

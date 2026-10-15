@@ -108,6 +108,20 @@ public class Fixture {
         public String greeting() { return greeting; }
     }
     public static String startJoin(Thread t) throws InterruptedException { t.start(); t.join(); return t.getName(); }
+    // A default inherited through one superinterface path, abstract through another.
+    public interface J { int n(); }
+    public interface K extends J { default int n() { return 42; } }
+    public interface L extends J {}
+    public static abstract class Both implements L, K {}
+    public static int callN(J j) { return j.n(); }
+    // A private superclass method doesn't implement an interface method.
+    public static class Y { private int m() { return 1; } }
+    public interface I { int m(); }
+    public static abstract class X extends Y implements I {}
+    public static int callM(I i) { return i.m(); }
+    public static boolean lockIsSelf(java.io.Writer w) throws Exception {
+        java.lang.reflect.Field f = java.io.Writer.class.getDeclaredField("lock"); f.setAccessible(true); return f.get(w) == w;
+    }
     public static final class Sealed {}
     public static class Hidden { private Hidden() {} public Hidden(int x) {} }
 
