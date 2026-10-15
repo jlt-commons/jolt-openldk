@@ -236,13 +236,16 @@
   A Java exception becomes an ex-info carrying :java/class, :java/message (nil
   when Java's getMessage was null) and :java/string, its toString. Anything
   the bridge itself refused, a missing class or a wrong argument count, carries
-  :openldk/error instead."
+  :openldk/error instead. When one of the exception's causes is a callback's
+  throw, :openldk/callback-error carries its error id, for the client to swap
+  for the original throwable."
   [text]
-  (let [[status a b c :as reply] (edn/read-string text)]
+  (let [[status a b c d :as reply] (edn/read-string text)]
     (case status
       :ok (lisp->value a)
-      :throw (throw (ex-info c {:java/class a
-                                :java/message (when (string? b) b)
-                                :java/string c}))
+      :throw (throw (ex-info c (cond-> {:java/class a
+                                        :java/message (when (string? b) b)
+                                        :java/string c}
+                                 (integer? d) (assoc :openldk/callback-error d))))
       :error (throw (ex-info (str "jolt-openldk: " a) {:openldk/error a}))
       (throw (ex-info "jolt-openldk: an unreadable reply" {:reply reply :text text})))))

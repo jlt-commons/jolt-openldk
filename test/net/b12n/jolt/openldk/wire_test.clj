@@ -111,7 +111,13 @@
                   "(:throw \"java.lang.NullPointerException\" :null \"java.lang.NullPointerException\")")
                  (catch Exception e e))]
       (is (nil? (:java/message (ex-data e))))
-      (is (= "java.lang.NullPointerException" (:java/class (ex-data e)))))))
+      (is (= "java.lang.NullPointerException" (:java/class (ex-data e))))))
+  (testing "a fifth element is the error id of a callback's throw among the causes"
+    (let [e (try (wire/reply->value
+                  "(:throw \"java.lang.IllegalStateException\" \"wrapped: x\" \"java.lang.IllegalStateException: wrapped: x\" 12)")
+                 (catch Exception e e))]
+      (is (= 12 (:openldk/callback-error (ex-data e))))
+      (is (= "java.lang.IllegalStateException" (:java/class (ex-data e)))))))
 
 (deftest a-bridge-error-becomes-ex-info
   (let [e (try (wire/reply->value "(:error \"class not found: Nope\")") (catch Exception e e))]

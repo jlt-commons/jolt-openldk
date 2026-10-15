@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A JavaRef argument is now checked against its parameter's class, the way
+  Java's `instanceof` decides, so passing an `ArrayList` handle where a
+  `String` goes fails before Java runs, as an `:openldk/error` naming both.
+  Array handles follow Java's covariance: a `String[]` passes for `Object[]`,
+  an `int[]` doesn't. A callback's JavaRef result is checked against its
+  return type the same way. Before, the wrong class surfaced later as
+  whatever error the Java code raised.
+
+- When Java wraps a callback's exception in another one, the `ex-info` you
+  get for the wrapper now has your original throwable as its `ex-cause`,
+  found anywhere down the cause chain. Before, you got the wrapper alone.
+
 - Fixed: `Instant.now()` failed with `The function
   OPENLDK::|jdk/internal/misc/VM.getNanoTimeAdjustment(J)| is undefined`, and
   so did `Date.toString` in a time zone CLDR has no display name for

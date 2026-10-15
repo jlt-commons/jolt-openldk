@@ -221,6 +221,45 @@
     (testing "the bridge is still healthy after all of that"
       (is (= 6 (ldk/call-static "Fixture" "sum" "([I)I" [1 2 3]))))))
 
+(deftest javaref-arguments-must-fit-their-parameter-class
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))]
+      (ldk/with-ref [xs (ldk/new-object "java.util.ArrayList" "()V")
+                     strs (ldk/new-array "Ljava/lang/String;" ["a" "b"])
+                     ints (ldk/new-array "I" [1 2])
+                     r (ldk/implement "java.lang.Runnable" (fn [] nil))]
+        (testing "an object of the wrong class is refused before Java runs"
+          (is (re-find #"a java.util.ArrayList for parameter Ljava/lang/String;"
+                       (msg #(ldk/call-static "Fixture" "upper" "(Ljava/lang/String;)Ljava/lang/String;" xs))))
+          (is (:openldk/error (ex-data (thrown #(ldk/call-static "Fixture" "upper" "(Ljava/lang/String;)Ljava/lang/String;" xs)))))
+          (is (re-find #"a jolt-openldk.Proxy\S* for parameter Ljava/util/Iterator;"
+                       (msg #(ldk/call-static "Fixture" "drain" "(Ljava/util/Iterator;)Ljava/lang/String;" r))))
+          (is (re-find #"for parameter Ljava/lang/Runnable;"
+                       (msg #(ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" xs)))))
+        (testing "superclasses and interfaces fit"
+          (is (= "[]" (ldk/call-static "java.lang.String" "valueOf" "(Ljava/lang/Object;)Ljava/lang/String;" xs)))
+          (ldk/with-ref [c (ldk/call-static "java.util.Collections" "unmodifiableCollection"
+                                            "(Ljava/util/Collection;)Ljava/util/Collection;" xs)]
+            (is (= "[]" (ldk/to-string c)) "an ArrayList is a Collection"))
+          (is (nil? (ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r)) "a proxy fits its interface"))
+        (testing "a callback's result is checked against its return type the same way"
+          (ldk/with-ref [it (ldk/implement "java.lang.Iterable" {"iterator" (constantly xs)})]
+            (is (re-find #"iterator\(\)Ljava/util/Iterator; returned a bad result: a java.util.ArrayList for parameter Ljava/util/Iterator;"
+                         (msg #(ldk/call-static "java.lang.String" "join"
+                                                "(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;" "," it))))))
+        (testing "an array handle must be the parameter's array type"
+          (is (re-find #"for array parameter \[I"
+                       (msg #(ldk/call-static "Fixture" "sum" "([I)I" strs))))
+          (is (re-find #"for array parameter \[Ljava/lang/Object;"
+                       (msg #(ldk/call-static "java.util.Arrays" "toString" "([Ljava/lang/Object;)Ljava/lang/String;" ints))))
+          (is (= "[a, b]" (ldk/call-static "java.util.Arrays" "toString" "([Ljava/lang/Object;)Ljava/lang/String;" strs))
+              "a String[] is an Object[]")
+          (is (re-find #"^\[Ljava.lang.String;:" (ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;" strs))
+              "any array is an Object")))
+      (testing "the bridge is still healthy after all of that"
+        (is (= 3 (ldk/call-static "Fixture" "sum" "([I)I" [1 2])))))))
+
 (deftest java-arrays-come-back-as-handles-and-read-as-vectors
   (when-built
     (ldk/init! {:classpath classes})
@@ -339,11 +378,24 @@
       (testing "and when it comes back out to Clojure, the original is rethrown"
         (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw boom))]
           (is (identical? boom (thrown #(ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r)))))))
-    (testing "a wrapper Java throws stays the wrapper, even when it quotes the original"
+    (testing "a wrapper Java throws stays the wrapper, with the original as its cause"
+      (let [inner (ex-info "inner" {})]
+        (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw inner))]
+          (let [e (thrown #(ldk/call-static "Fixture" "wrap" "(Ljava/lang/Runnable;)V" r))]
+            (is (= "java.lang.IllegalStateException" (:java/class (ex-data e))))
+            (is (re-find #"^wrapped: inner" (:java/message (ex-data e))))
+            (is (identical? inner (ex-cause e)))
+            (is (not (contains? (ex-data e) :openldk/callback-error)) "the id is not left in ex-data")))
+        (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw inner))]
+          (let [e (thrown #(ldk/call-static "Fixture" "wrapTwice" "(Ljava/lang/Runnable;)V" r))]
+            (is (= "java.lang.UnsupportedOperationException" (:java/class (ex-data e))))
+            (is (identical? inner (ex-cause e)) "found two causes down")))))
+    (testing "a wrapper that only quotes the message has no cause"
       (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw (ex-info "inner" {})))]
-        (let [e (thrown #(ldk/call-static "Fixture" "wrap" "(Ljava/lang/Runnable;)V" r))]
+        (let [e (thrown #(ldk/call-static "Fixture" "quote" "(Ljava/lang/Runnable;)V" r))]
           (is (= "java.lang.IllegalStateException" (:java/class (ex-data e))))
-          (is (re-find #"^wrapped: inner" (:java/message (ex-data e)))))))
+          (is (re-find #"^quoted: inner" (:java/message (ex-data e))))
+          (is (nil? (ex-cause e))))))
     (testing "a map without the method Java called"
       (ldk/with-ref [it (ldk/implement "java.util.Iterator" {"hasNext" (constantly true)})]
         (is (re-find #"no fn for next\(\)Ljava/lang/Object;"
