@@ -588,6 +588,30 @@
           (is (re-find #"call-super needs a JavaRef"
                        (msg #(ldk/call-super "x" "toString" "()Ljava/lang/String;")))))))))
 
+(deftest subclass-threads-failures-and-release
+  (when-built
+    (ldk/init! {:classpath classes})
+    (testing "a Thread subclass run on the Java thread Java started"
+      (let [ran (atom nil)]
+        ;; run must not call into Java: this thread waits in join holding the
+        ;; call lock (the documented deadlock).
+        (ldk/with-ref [t (ldk/subclass "java.lang.Thread" "(Ljava/lang/String;)V" ["worker-1"]
+                                       {"run" (fn [this] (reset! ran [(ldk/ref? this) (.getName (Thread/currentThread))]))})]
+          (is (= "worker-1" (ldk/call-static "Fixture" "startJoin" "(Ljava/lang/Thread;)Ljava/lang/String;" t)))
+          (is (true? (first @ran))))))
+    (testing "a superclass constructor that calls an override reaches the fn"
+      (ldk/with-ref [g (ldk/subclass "Fixture$Greeter" {"greet" (fn [_] "hello")})]
+        (is (= "hello" (ldk/call g "greeting" "()Ljava/lang/String;")))))
+    (testing "a fn that throws: Java sees a RuntimeException, Clojure gets the original back"
+      (let [boom (ex-info "boom from run" {})]
+        (ldk/with-ref [t (ldk/subclass "java.util.TimerTask" {"run" (fn [_] (throw boom))})]
+          (is (identical? boom (thrown #(ldk/call-static "Fixture" "runTask" "(Ljava/util/TimerTask;)Z" t)))))))
+    (testing "release! drops the fns, so a stored copy refuses"
+      (let [t (ldk/subclass "java.lang.Thread" {"run" (fn [_] nil)})]
+        (ldk/call-static "Fixture" "store" "(Ljava/lang/Runnable;)V" t)
+        (ldk/release! t)
+        (is (re-find #"was released" (ex-message (thrown #(ldk/call-static "Fixture" "runStored" "()V")))))))))
+
 (deftest another-thread-can-call
   (when-built
    (ldk/init! {:classpath classes})
