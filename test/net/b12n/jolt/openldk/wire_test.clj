@@ -89,6 +89,8 @@
          (wire/parse-call "(:call 3 \"compare\" \"(Ljava/lang/Object;Ljava/lang/Object;)I\" ((:s \"a\") (:ref 9 \"Fixture\")))")))
   (is (= "(:ok (:i 1))" (wire/ok-reply "(II)I" 1)))
   (is (= "(:ok (:void))" (wire/ok-reply "()V" {:anything "a void method's result is ignored"})))
+  (is (re-find #"a callback cannot return a jolt double-array"
+               (try (wire/ok-reply "()[D" (double-array [1.0])) (catch Exception e (ex-message e)))))
   (is (= "(:throw \"no \\\"good\\\"\" 12)" (wire/throw-reply "no \"good\"" 12)))
   (is (= "(:error \"x\")" (wire/error-reply "x")))
   (is (= 12 (wire/callback-error-id "java.lang.RuntimeException: boom [jolt-openldk callback error 12]")))

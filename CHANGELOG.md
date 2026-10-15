@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A callback that returns a jolt typed array (`int-array` ...) now gets an
+  error saying to return a vector or a JavaRef from `new-array`, instead of
+  one worded for an argument. A `:raw` reply the client can't read is now an
+  error naming its component, and its buffer is still freed.
+
 - A JavaRef argument is now checked against its parameter's class, the way
   Java's `instanceof` decides, so passing an `ArrayList` handle where a
   `String` goes fails before Java runs, as an `:openldk/error` naming both.

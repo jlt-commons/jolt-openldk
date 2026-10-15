@@ -6,7 +6,8 @@
   that must not pass by skipping."
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is run-tests testing]]
-            [net.b12n.jolt.openldk :as ldk]))
+            [net.b12n.jolt.openldk :as ldk]
+            [net.b12n.jolt.openldk.wire :as wire]))
 
 (def classes (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes"))
 
@@ -404,6 +405,10 @@
       (ldk/with-ref [s (ldk/implement "java.util.function.IntSupplier" (constantly "not an int"))]
         (is (re-find #"^caught: jolt-openldk callback getAsInt\(\)I returned a bad result: a string for parameter I"
                      (ldk/call-static "Fixture" "tryInt" "(Ljava/util/function/IntSupplier;)Ljava/lang/String;" s)))))
+    (testing "a typed array returned from a callback says what to return instead"
+      (ldk/with-ref [s (ldk/implement "java.util.function.Supplier" (constantly (int-array [1 2])))]
+        (is (re-find #"a callback cannot return a jolt int-array; return a vector, or a JavaRef from new-array"
+                     (ex-message (thrown #(ldk/call-static "Fixture" "twice" "(Ljava/util/function/Supplier;)Ljava/lang/String;" s)))))))
     (testing "a result that does not fit the return type"
       (ldk/with-ref [op (ldk/implement "java.util.function.IntBinaryOperator" (fn [_ _] 99999999999))]
         (is (re-find #"does not fit a Java int"
@@ -559,6 +564,15 @@
           (ldk/call-static "java.util.Arrays" "sort" "([I)V" xs)
           (is (= [1 2 3] (ldk/array->vec xs)))
           (is (= [3 1 2] (vec in)) "Java sorting its array leaves the int-array alone"))))))
+
+(deftest a-raw-reply-it-cannot-read-is-refused
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [copy-raw @#'ldk/copy-raw]
+      (is (re-find #"a raw reply with unknown component Q"
+                   (ex-message (thrown #(copy-raw (wire/->RawReply "Q" 0 0))))))
+      (is (re-find #"a raw reply with unknown component Q"
+                   (ex-message (thrown #(copy-raw (wire/->RawReply "Q" 0 3)))))))))
 
 (deftest array-primitive-refusals
   (when-built
