@@ -412,13 +412,14 @@ or nil, and %ldk-ref-arg checks the JavaRef's class.")
   "OBJECT, a JavaRef's object, if Java's instanceof says it fits reference
 parameter PARAM. Arrays follow Java's covariance (a String[] is an Object[],
 an int[] is not). A class that cannot be loaded is left to the call to report."
-  (let ((fits (if (char= (char param 0) #\[)
-                  (%array-assignable-to-p object param)
-                  (let ((binary (subseq param 1 (1- (length param)))))
-                    (or (string= binary "java/lang/Object")
-                        (null (classload binary))
-                        (eql 1 (%instanceof-check object binary
-                                                  (intern binary (class-package binary)))))))))
+  (let* ((element (string-left-trim "[" param))
+         (binary (and (char= (char element 0) #\L) (subseq element 1 (1- (length element)))))
+         (fits (cond
+                 ((and binary (null (classload binary))) t)
+                 ((char= (char param 0) #\[) (%array-assignable-to-p object param))
+                 ((string= binary "java/lang/Object") t)
+                 (t (eql 1 (%instanceof-check object binary
+                                              (intern binary (class-package binary))))))))
     (unless fits
       (error "a ~A for ~:[~;array ~]parameter ~A"
              (%ldk-class-dotted object) (char= (char param 0) #\[) param))
@@ -888,7 +889,9 @@ looked at: the client already knows that case by its class and message."
                (%ldk-class-dotted throwable)
                (let ((m (|getMessage()| throwable))) (if m (%ldk-lstring m) :null))
                (%ldk-lstring (|toString()| throwable))
-               (let ((id (%ldk-callback-cause-id throwable))) (and id (list id))))
+               ;; A cause whose getCause or getMessage throws costs the id,
+               ;; never the exception itself.
+               (let ((id (ignore-errors (%ldk-callback-cause-id throwable)))) (and id (list id))))
         (list :throw "java.lang.Throwable" :null (format nil "~A" condition)))))
 
 (defun %ldk-read-request (text)

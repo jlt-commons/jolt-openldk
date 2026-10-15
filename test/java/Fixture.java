@@ -68,6 +68,11 @@ public class Fixture {
         try { wrap(r); }
         catch (IllegalStateException e) { throw new UnsupportedOperationException("outer", e); }
     }
+    public static class Nasty extends RuntimeException {
+        public Nasty() { super("nasty"); }
+        @Override public synchronized Throwable getCause() { throw new IllegalStateException("no cause for you"); }
+    }
+    public static void nasty() { throw new IllegalArgumentException("outer", new Nasty()); }
     public static void quote(Runnable r) {
         try { r.run(); }
         catch (RuntimeException e) { throw new IllegalStateException("quoted: " + e.getMessage()); }

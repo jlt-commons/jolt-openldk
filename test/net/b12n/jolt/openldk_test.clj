@@ -257,7 +257,12 @@
           (is (= "[a, b]" (ldk/call-static "java.util.Arrays" "toString" "([Ljava/lang/Object;)Ljava/lang/String;" strs))
               "a String[] is an Object[]")
           (is (re-find #"^\[Ljava.lang.String;:" (ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;" strs))
-              "any array is an Object")))
+              "any array is an Object"))
+        (testing "a parameter class that cannot be loaded is left to the call to report"
+          (doseq [desc ["(Lnope/Foo;)Ljava/lang/String;" "([Lnope/Foo;)Ljava/lang/String;"
+                        "([[Lnope/Foo;)Ljava/lang/String;"]]
+            (let [e (thrown #(ldk/call-static "Fixture" "nothing" desc strs))]
+              (is (re-find #"no static method" (str (:openldk/error (ex-data e)))) desc)))))
       (testing "the bridge is still healthy after all of that"
         (is (= 3 (ldk/call-static "Fixture" "sum" "([I)I" [1 2])))))))
 
@@ -391,6 +396,10 @@
           (let [e (thrown #(ldk/call-static "Fixture" "wrapTwice" "(Ljava/lang/Runnable;)V" r))]
             (is (= "java.lang.UnsupportedOperationException" (:java/class (ex-data e))))
             (is (identical? inner (ex-cause e)) "found two causes down")))))
+    (testing "a cause whose getCause throws still lets the exception through"
+      (let [e (thrown #(ldk/call-static "Fixture" "nasty" "()V"))]
+        (is (= "java.lang.IllegalArgumentException" (:java/class (ex-data e))))
+        (is (= "outer" (:java/message (ex-data e))))))
     (testing "a wrapper that only quotes the message has no cause"
       (ldk/with-ref [r (ldk/implement "java.lang.Runnable" #(throw (ex-info "inner" {})))]
         (let [e (thrown #(ldk/call-static "Fixture" "quote" "(Ljava/lang/Runnable;)V" r))]
