@@ -559,6 +559,35 @@
     (testing "the bridge is still healthy after all of that"
       (is (= 3 (ldk/call-static "Fixture" "add" "(II)I" 1 2))))))
 
+(deftest call-super-runs-the-superclass-version
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))]
+      (testing "from an override, a method the superclass declares"
+        (ldk/with-ref [s (ldk/subclass "Fixture$Shape"
+                                       {"area" (fn [_] 2.0)
+                                        "describe" (fn [this] (str "mine: " (ldk/call-super this "describe" "()Ljava/lang/String;")))})]
+          (is (= "mine: shape of area 2.0" (ldk/call s "describe" "()Ljava/lang/String;")))))
+      (testing "a method the superclass inherits, and from outside a callback"
+        (ldk/with-ref [l (ldk/subclass "java.util.AbstractList"
+                                       {"get" (fn [_ i] (inc i)) "size" (fn [_] 2)
+                                        "toString" (fn [this] (str "<" (ldk/call-super this "toString" "()Ljava/lang/String;") ">"))})]
+          (is (= "<[1, 2]>" (ldk/to-string l)))
+          (is (= "[1, 2]" (ldk/call-super l "toString" "()Ljava/lang/String;")))
+          (is (true? (ldk/call-super l "contains" "(Ljava/lang/Object;)Z" 2)) "arguments convert as for call")))
+      (testing "refusals"
+        (ldk/with-ref [xs (ldk/new-object "java.util.ArrayList" "()V")
+                       l (ldk/subclass "java.util.AbstractList" {"get" (fn [_ i] i) "size" (fn [_] 0)})]
+          (is (re-find #"call-super needs an object made by subclass, not a java.util.ArrayList"
+                       (msg #(ldk/call-super xs "toString" "()Ljava/lang/String;"))))
+          (is (re-find #"no method nope\(\)V on java.util.AbstractList"
+                       (msg #(ldk/call-super l "nope" "()V"))))
+          (is (re-find #"size\(\)I is abstract in java.util.AbstractList"
+                       (msg #(ldk/call-super l "size" "()I"))))
+          (is (:openldk/error (ex-data (thrown #(ldk/call-super l "size" "()I")))))
+          (is (re-find #"call-super needs a JavaRef"
+                       (msg #(ldk/call-super "x" "toString" "()Ljava/lang/String;")))))))))
+
 (deftest another-thread-can-call
   (when-built
    (ldk/init! {:classpath classes})

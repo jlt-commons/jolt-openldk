@@ -171,6 +171,10 @@
   (str "(:subclass " (lisp-string class-name) " " (lisp-string descriptor) " " (args->lisp args)
        " " fn-id " (" (str/join " " (map lisp-string method-keys)) "))"))
 
+(defn super-request [r method descriptor args]
+  (str "(:super " (:handle r) " " (lisp-string method) " " (lisp-string descriptor) " "
+       (args->lisp args) ")"))
+
 (defn proxy-request [interfaces fn-id]
   (str "(:proxy (" (str/join " " (map lisp-string interfaces)) ") " fn-id ")"))
 
