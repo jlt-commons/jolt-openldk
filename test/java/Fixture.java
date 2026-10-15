@@ -82,6 +82,28 @@ public class Fixture {
         catch (RuntimeException e) { return "caught: " + e.getMessage(); }
     }
 
+    // Used with ldk/subclass.
+    public static long sumList(java.util.List<? extends Number> l) { long t = 0; for (Number x : l) t += x.longValue(); return t; }
+    public static int readAll(java.io.InputStream in) throws java.io.IOException {
+        byte[] buf = new byte[16]; int n = in.read(buf, 0, buf.length); int t = 0;
+        for (int i = 0; i < n; i++) t += buf[i];
+        return n * 1000 + t;
+    }
+    public static String writeSome(java.io.Writer w) throws java.io.IOException { w.write("abc"); w.write('d'); w.flush(); return "ok"; }
+    public static long asLong(Number n) { return n.longValue() + n.intValue(); }
+    public static boolean runTask(java.util.TimerTask t) { t.run(); return t.cancel(); }
+
+    public static abstract class Shape {
+        protected Shape() {}
+        public abstract double area();
+        public final String kind() { return "shape"; }
+        private int secret() { return 1; }
+        public static int count() { return 0; }
+        public String describe() { return kind() + " of area " + area(); }
+    }
+    public static final class Sealed {}
+    public static class Hidden { private Hidden() {} public Hidden(int x) {} }
+
     private static Runnable stored;
     public static void store(Runnable r) { stored = r; }
     public static void runStored() { stored.run(); }

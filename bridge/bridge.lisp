@@ -23,6 +23,8 @@
 ;;;                                             malloc'd, freed by the caller
 ;;;   (:length id)                              (:ok (:i n))
 ;;;   (:proxy ("java/util/Comparator") fn-id)   (:ok (:ref id "jolt-openldk.Proxy..."))
+;;;   (:subclass "a.B" "()V" (v ...) fn-id ("run" ...))
+;;;                                             (:ok (:ref id "jolt-openldk.Subclass..."))
 ;;;
 ;;; The other direction, Java calling Clojure, goes through the C function
 ;;; pointer ldk_upcall that jolt installs: (:call fn-id "compare" "(..)I"
@@ -718,6 +720,139 @@ define: its abstract methods and its superinterfaces', less Object's."
          (object (make-instance (%ldk-proxy-class binaries) :fn-id fn-id)))
     (list :ref (%ldk-handle object) (%ldk-class-dotted object))))
 
+;;; --- subclasses: a Java class extended from Clojure ---------------------------
+;;;
+;;; The proxy mechanism with a class for superclass: a CLOS class made here
+;;; whose superclass is the Java class's, with a method on OpenLDK's generic
+;;; function for each method defined, upcalling with this first. The instance
+;;; runs a superclass constructor through invoke-special, as a Java subclass's
+;;; constructor would.
+
+(defvar *ldk-subclass-classes* (make-hash-table :test 'equal))
+(defvar *ldk-subclass-count* 0)
+
+(defun %ldk-flag-p (thing flag)
+  (not (zerop (logand flag (slot-value thing 'access-flags)))))
+
+(defun %ldk-class-method-table (binary)
+  "Every instance method an object of class BINARY has, as a list of
+(key name desc method) with the most specific declaration first per key, the
+superclass chain walked before the interfaces. KEY is OpenLDK's method key.
+A default method is an implementation, so it hides an abstract one further
+up; an interface method no class or default implements stays abstract."
+  (let ((seen (make-hash-table :test 'equal)) (out '()))
+    (flet ((note (m)
+             (unless (or (static-p m) (char= (char (name m) 0) #\<))
+               (let ((key (%ldk-method-key (name m) (descriptor m))))
+                 (unless (gethash key seen)
+                   (setf (gethash key seen) t)
+                   (push (list key (name m) (descriptor m) m) out))))))
+      (let ((chain (loop for c = (%ldk-class binary) then (and (super c) (%ldk-class (super c)))
+                         while c collect c)))
+        (dolist (c chain)
+          (loop for m across (slot-value c 'methods) do (note m)))
+        (labels ((walk (name)
+                   (let ((i (%ldk-class name)))
+                     (loop for m across (slot-value i 'methods) do (note m))
+                     (loop for super across (or (slot-value i 'interfaces) #()) do (walk super)))))
+          (dolist (c chain)
+            (loop for i across (or (slot-value c 'interfaces) #()) do (walk i))))))
+    (nreverse out)))
+
+(defun %ldk-static-method-named (binary name desc)
+  "A static method NAME (with DESC, when given) on BINARY or a superclass."
+  (loop for c = (%ldk-class binary) then (and (super c) (%ldk-class (super c)))
+        while c
+        thereis (find-if (lambda (m) (and (static-p m) (string= (name m) name)
+                                          (or (null desc) (string= (descriptor m) desc))))
+                         (slot-value c 'methods))))
+
+(defun %ldk-subclass-methods (binary keys)
+  "The (name desc) pairs a subclass of BINARY defines for map KEYS: every
+abstract method, plus what each key names. Signals for a key that names
+nothing overridable, or a bare name matching several overloads."
+  (let* ((table (%ldk-class-method-table binary))
+         (dotted (substitute #\. #\/ binary))
+         (overridable (remove-if (lambda (e) (%ldk-flag-p (fourth e) (logior #x2 #x10))) table))
+         (abstract (remove-if-not (lambda (e) (abstract-p (fourth e))) overridable))
+         (chosen (copy-list abstract)))
+    (flet ((why-not (e)
+             (error "~A~A is ~:[final~;private~], so a subclass of ~A can't override it"
+                    (second e) (third e) (%ldk-flag-p (fourth e) #x2) dotted)))
+      (dolist (key keys)
+        (let* ((open (position #\( key))
+               (name (if open (subseq key 0 open) key))
+               (desc (and open (subseq key open)))
+               (named (remove-if-not (lambda (e) (and (string= (second e) name)
+                                                      (or (null desc) (string= (third e) desc))))
+                                     table))
+               (open-named (intersection named overridable))
+               (abstract-named (intersection named abstract)))
+          (cond
+            (abstract-named nil)
+            ((and open-named (or desc (null (rest open-named))))
+             (pushnew (first open-named) chosen))
+            (open-named
+             (error "~A matches several methods of ~A; pick one by descriptor: ~{~A~^, ~}"
+                    name dotted (mapcar (lambda (e) (concatenate 'string (second e) (third e))) open-named)))
+            (named (why-not (first named)))
+            ((%ldk-static-method-named binary name desc)
+             (let ((m (%ldk-static-method-named binary name desc)))
+               (error "~A~A is static, so a subclass of ~A can't override it"
+                      (name m) (descriptor m) dotted)))
+            (t (error "no method ~A on ~A" key dotted))))))
+    (mapcar (lambda (e) (list (second e) (third e)))
+            (remove-duplicates chosen :key #'first :test #'string= :from-end t))))
+
+(defun %ldk-subclass-class (binary methods)
+  "The generated subclass of BINARY defining METHODS, made once per set."
+  (sb-thread:with-mutex (*ldk-proxy-lock*)
+    (let ((cache-key (cons binary (sort (mapcar (lambda (m) (apply #'concatenate 'string m)) methods)
+                                        #'string<))))
+      (or (gethash cache-key *ldk-subclass-classes*)
+          (let* ((super-sym (%ldk-class-symbol binary))
+                 (class-sym (intern (format nil "jolt-openldk/Subclass~D[~A]"
+                                            (incf *ldk-subclass-count*) binary)
+                                    :openldk)))
+            (eval `(defclass ,class-sym (,super-sym) ((fn-id :initarg :fn-id))))
+            ;; getClass() looks the object's class up by this name: answer
+            ;; with the superclass's Class, since no Java class stands behind
+            ;; this one.
+            (setf (gethash (symbol-name class-sym) *java-classes-by-bin-name*)
+                  (%get-java-class-by-bin-name binary t))
+            (loop for (name desc) in methods
+                  for gf = (intern (lispize-method-name (concatenate 'string name desc)) :openldk)
+                  for params = (loop for i below (length (%ldk-split-descriptor desc))
+                                     collect (intern (format nil "P~D" i) :openldk))
+                  do (unless (and (fboundp gf) (typep (fdefinition gf) 'generic-function))
+                       (ensure-generic-function gf :generic-function-class 'java-generic-function
+                                                   :lambda-list (cons '|this| params)))
+                     (eval `(defmethod ,gf ((|this| ,class-sym) ,@params)
+                              (%ldk-upcall |this| ,name ,desc (list ,@params) t))))
+            (setf (gethash cache-key *ldk-subclass-classes*) class-sym))))))
+
+(defun %ldk-new-subclass (classname desc values fn-id keys)
+  (let* ((binary (substitute #\/ #\. classname))
+         (dotted (substitute #\. #\/ binary))
+         (class (%ldk-class dotted)))
+    (cond ((interface-p class) (error "~A is an interface; use implement" dotted))
+          ((%ldk-flag-p class #x4000) (error "~A is an enum, so it can't be subclassed" dotted))
+          ((%ldk-flag-p class #x10) (error "~A is final, so it can't be subclassed" dotted)))
+    (let ((ctor (find-if (lambda (m) (and (string= (name m) "<init>") (string= (descriptor m) desc)))
+                         (slot-value class 'methods))))
+      (unless ctor (error "no constructor ~A on ~A" desc dotted))
+      (when (%ldk-flag-p ctor #x2) (error "constructor ~A of ~A is private" desc dotted)))
+    (let* ((args (%ldk-args desc values))
+           (class-sym (%ldk-subclass-class binary (%ldk-subclass-methods binary keys)))
+           (object (make-instance class-sym :fn-id fn-id))
+           (java-class (%get-java-class-by-bin-name binary t)))
+      (when (and java-class (slot-exists-p object '|clazz|))
+        (setf (slot-value object '|clazz|) java-class))
+      (invoke-special (intern (%ldk-method-key "<init>" desc) :openldk)
+                      (%ldk-class-symbol binary)
+                      (cons object args))
+      (list :ref (%ldk-handle object) (%ldk-class-dotted object)))))
+
 (defun %ldk-sap-utf8 (sap)
   "The NUL-terminated UTF-8 string at SAP."
   (let ((n (loop for i from 0 until (zerop (sb-sys:sap-ref-8 sap i)) finally (return i)))
@@ -753,16 +888,19 @@ reply was malloc'd on the far side (ldk_strdup) and is freed here."
     (|<init>(Ljava/lang/String;)| exc (jstring message))
     (error (%lisp-condition exc))))
 
-(defun %ldk-upcall (proxy name desc args)
+(defun %ldk-upcall (proxy name desc args &optional this-first)
   "Run Clojure fn behind PROXY for Java method NAME DESC with ARGS. Objects
-among ARGS reach Clojure as borrowed handles, released when it replies."
+among ARGS reach Clojure as borrowed handles, released when it replies. With
+THIS-FIRST, PROXY itself goes first, borrowed the same way: a subclass's fns
+take this."
   (multiple-value-bind (params ret) (%ldk-split-descriptor desc)
     ;; Only the handles made for ARGS are borrowed. The Clojure fn runs with
     ;; collection off, so objects it gets from its own calls into Java are its
     ;; to keep, like any other JavaRef.
     (let* ((borrowed '())
            (wire-args (let ((*ldk-borrowed* '()))
-                        (prog1 (mapcar #'%ldk-result params args)
+                        (prog1 (append (and this-first (list (%ldk-object proxy)))
+                                       (mapcar #'%ldk-result params args))
                           (setf borrowed *ldk-borrowed*)))))
       (unwind-protect
            (let* ((*ldk-borrowed* :none)
@@ -862,7 +1000,9 @@ among ARGS reach Clojure as borrowed handles, released when it replies."
       (:elements (%ldk-elements (%ldk-array (first rest))))
       (:length (list :i (length (java-array-data (%ldk-array (first rest))))))
       (:proxy (destructuring-bind (interfaces fn-id) rest
-                (%ldk-new-proxy interfaces fn-id))))))
+                (%ldk-new-proxy interfaces fn-id)))
+      (:subclass (destructuring-bind (classname desc values fn-id keys) rest
+                   (%ldk-new-subclass classname desc values fn-id keys))))))
 
 (defun %ldk-callback-cause-id (throwable)
   "The error id of the first of THROWABLE's causes that is the RuntimeException

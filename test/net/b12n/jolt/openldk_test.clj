@@ -460,6 +460,105 @@
       (is (re-find #"is a class, not an interface"
                    (ex-message (thrown #(ldk/implement "java.util.ArrayList" (fn [] nil)))))))))
 
+(deftest subclasses-of-abstract-classes
+  (when-built
+    (ldk/init! {:classpath classes})
+    (testing "AbstractList from get and size, used by Java and by AbstractList's own methods"
+      (ldk/with-ref [l (ldk/subclass "java.util.AbstractList" {"get" (fn [_ i] (* 10 (inc i)))
+                                                                "size" (fn [_] 3)})]
+        (is (= 60 (ldk/call-static "Fixture" "sumList" "(Ljava/util/List;)J" l)))
+        (is (= "[10, 20, 30]" (ldk/to-string l)))
+        (is (true? (ldk/call l "contains" "(Ljava/lang/Object;)Z" 20)))
+        (is (= "java.lang.UnsupportedOperationException"
+               (:java/class (ex-data (thrown #(ldk/call l "add" "(Ljava/lang/Object;)Z" 1))))))
+        (is (= "java.util.AbstractList:[10, 20, 30]"
+               (ldk/call-static "Fixture" "describe" "(Ljava/lang/Object;)Ljava/lang/String;" l))
+            "getClass() answers, with the superclass")))
+    (testing "this comes first, as a borrowed JavaRef"
+      (let [seen (atom nil)]
+        (ldk/with-ref [l (ldk/subclass "java.util.AbstractList" {"get" (fn [this i] (reset! seen (ldk/ref? this)) i)
+                                                                  "size" (fn [_] 1)})]
+          (ldk/call-static "Fixture" "sumList" "(Ljava/util/List;)J" l)
+          (is (true? @seen)))))
+    (testing "InputStream from read() alone, read through read(byte[], int, int)"
+      (let [left (atom [1 2 3 4 5])]
+        (ldk/with-ref [in (ldk/subclass "java.io.InputStream"
+                                        {"read" (fn [_] (if-let [b (first @left)] (do (swap! left rest) b) -1))})]
+          (is (= 5015 (ldk/call-static "Fixture" "readAll" "(Ljava/io/InputStream;)I" in))))))
+    (testing "Writer: write(String) and write(int) reach write(char[], int, int)"
+      (let [got (atom [])]
+        (ldk/with-ref [w (ldk/subclass "java.io.Writer"
+                                       {"write" (fn [_ cbuf off len] (swap! got into (subvec (ldk/array->vec cbuf) off (+ off len))))
+                                        "flush" (fn [_])
+                                        "close" (fn [_])})]
+          (is (= "ok" (ldk/call-static "Fixture" "writeSome" "(Ljava/io/Writer;)Ljava/lang/String;" w)))
+          (is (= [\a \b \c \d] @got)))))
+    (testing "Number: four abstract methods"
+      (ldk/with-ref [n (ldk/subclass "java.lang.Number" {"intValue" (fn [_] 7) "longValue" (fn [_] 70)
+                                                         "floatValue" (fn [_] 7.5) "doubleValue" (fn [_] 7.5)})]
+        (is (= 77 (ldk/call-static "Fixture" "asLong" "(Ljava/lang/Number;)J" n)))))
+    (testing "TimerTask: run is ours, cancel is TimerTask's and reads what its constructor set"
+      (let [ran (atom 0)]
+        (ldk/with-ref [t (ldk/subclass "java.util.TimerTask" {"run" (fn [_] (swap! ran inc))})]
+          (is (false? (ldk/call-static "Fixture" "runTask" "(Ljava/util/TimerTask;)Z" t)))
+          (is (= 1 @ran)))))
+    (testing "an abstract method with no fn throws a RuntimeException naming it"
+      (ldk/with-ref [l (ldk/subclass "java.util.AbstractList" {"get" (fn [_ i] i)})]
+        (let [e (thrown #(ldk/call-static "Fixture" "sumList" "(Ljava/util/List;)J" l))]
+          (is (= "java.lang.RuntimeException" (:java/class (ex-data e))))
+          (is (re-find #"no fn for size\(\)I" (str (:java/message (ex-data e))))))))))
+
+(deftest subclass-method-keys-and-refusals
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))]
+      (testing "a concrete method named in the map is overridden, and Java's own methods call it"
+        (ldk/with-ref [s (ldk/subclass "Fixture$Shape" {"area" (fn [_] 2.5) "describe" (fn [_] "mine")})]
+          (is (= "mine" (ldk/call s "describe" "()Ljava/lang/String;")))
+          (is (= 2.5 (ldk/call s "area" "()D")))))
+      (testing "a bare name over several concrete overloads is refused, listing them"
+        (let [m (msg #(ldk/subclass "java.util.ArrayList" {"add" (fn [_ x] true)}))]
+          (is (re-find #"add matches several methods of java.util.ArrayList" m))
+          (is (re-find #"add\(Ljava/lang/Object;\)Z" m))
+          (is (re-find #"add\(ILjava/lang/Object;\)V" m))))
+      (testing "name plus descriptor picks one overload"
+        (let [added (atom [])]
+          (ldk/with-ref [l (ldk/subclass "java.util.ArrayList" {"add(Ljava/lang/Object;)Z" (fn [_ x] (swap! added conj x) true)})]
+            (is (true? (ldk/call l "add" "(Ljava/lang/Object;)Z" "a")))
+            (is (= ["a"] @added)))))
+      (testing "a bare name with abstract methods takes only those"
+        (let [got (atom [])]
+          (ldk/with-ref [w (ldk/subclass "java.io.Writer" {"write" (fn [_ cbuf off len] (swap! got conj len))
+                                                           "flush" (fn [_]) "close" (fn [_])})]
+            (ldk/call w "write" "(Ljava/lang/String;)V" "xyz")
+            (is (= [3] @got) "write(String) stayed Writer's and called write(char[], int, int)"))))
+      (testing "keys that name nothing overridable are refused at subclass time"
+        (is (re-find #"no method szie on java.util.AbstractList" (msg #(ldk/subclass "java.util.AbstractList" {"szie" (fn [_] 1)}))))
+        (is (re-find #"no method size\(\)J on java.util.AbstractList" (msg #(ldk/subclass "java.util.AbstractList" {"size()J" (fn [_] 1)}))))
+        (is (re-find #"kind\(\)Ljava/lang/String; is final" (msg #(ldk/subclass "Fixture$Shape" {"kind" (fn [_] "x")}))))
+        (is (re-find #"secret\(\)I is private" (msg #(ldk/subclass "Fixture$Shape" {"secret" (fn [_] 2)}))))
+        (is (re-find #"count\(\)I is static" (msg #(ldk/subclass "Fixture$Shape" {"count" (fn [_] 2)})))))
+      (testing "a map with something other than string keys and fns"
+        (is (re-find #"subclass takes a map of method names to fns" (msg #(ldk/subclass "java.util.TimerTask" {:run (fn [_])}))))
+        (is (re-find #"subclass takes a map of method names to fns" (msg #(ldk/subclass "java.util.TimerTask" (fn [_]))))))
+      (testing "classes that can't be subclassed"
+        (is (re-find #"java.util.List is an interface; use implement" (msg #(ldk/subclass "java.util.List" {}))))
+        (is (re-find #"java.lang.String is final" (msg #(ldk/subclass "java.lang.String" {}))))
+        (is (re-find #"Fixture\$Sealed is final" (msg #(ldk/subclass "Fixture$Sealed" {}))))
+        (is (re-find #"java.time.DayOfWeek is (final|an enum)" (msg #(ldk/subclass "java.time.DayOfWeek" {}))))
+        (is (re-find #"class not found: nope.Nope" (msg #(ldk/subclass "nope.Nope" {}))))
+        (is (re-find #"constructor \(\)V of Fixture\$Hidden is private" (msg #(ldk/subclass "Fixture$Hidden" {}))))
+        (is (re-find #"no constructor \(I\)V on java.util.TimerTask" (msg #(ldk/subclass "java.util.TimerTask" "(I)V" [1] {"run" (fn [_])}))))
+        (ldk/with-ref [h (ldk/subclass "Fixture$Hidden" "(I)V" [1] {})]
+          (is (ldk/ref? h) "a public constructor of the same class is fine")))
+      (testing "one generated class per superclass and set of methods"
+        (let [names (fn [m] (ldk/with-ref [o (ldk/subclass "java.util.AbstractList" m)] (ldk/class-name o)))]
+          (is (= (names {"get" (fn [_ i] i) "size" (fn [_] 0)}) (names {"get" (fn [_ i] 0) "size" (fn [_] 1)})))
+          (is (not= (names {"get" (fn [_ i] i) "size" (fn [_] 0)})
+                    (names {"get" (fn [_ i] i) "size" (fn [_] 0) "toString" (fn [_] "x")}))))))
+    (testing "the bridge is still healthy after all of that"
+      (is (= 3 (ldk/call-static "Fixture" "add" "(II)I" 1 2))))))
+
 (deftest another-thread-can-call
   (when-built
    (ldk/init! {:classpath classes})
