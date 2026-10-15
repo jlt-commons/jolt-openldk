@@ -113,6 +113,7 @@ public class Fixture {
     public interface K extends J { default int n() { return 42; } }
     public interface L extends J {}
     public static abstract class Both implements L, K {}
+    public interface LK extends L, K {}
     public static int callN(J j) { return j.n(); }
     // A private superclass method doesn't implement an interface method.
     public static class Y { private int m() { return 1; } }

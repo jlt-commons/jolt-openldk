@@ -662,31 +662,21 @@ every object already has from java.lang.Object.")
                  (let ((s (find-symbol binary (class-package binary)))) (and s (find-class s nil) s)))))
     (or sym (error "no CLOS class for ~A" binary))))
 
-(defun %ldk-abstract-methods (binary)
-  "The (name descriptor) pairs a class implementing interface BINARY must
-define: its abstract methods and its superinterfaces', less Object's."
-  ;; Keyed by name and parameters, OpenLDK's own method key, so a covariant
-  ;; redeclaration is one method. A subinterface is walked before its supers
-  ;; and its default methods are marked seen too, so a default that overrides
-  ;; a super's abstract method is left to run rather than shadowed.
-  (let ((seen (make-hash-table :test 'equal)) (out '()))
-    (labels ((walk (name)
-               (let ((class (%ldk-class name)))
-                 (unless (interface-p class)
-                   (error "~A is a class, not an interface" (substitute #\. #\/ name)))
-                 (loop for m across (slot-value class 'methods)
-                       for key = (%ldk-method-key (name m) (descriptor m))
-                       unless (or (static-p m)
-                                  (gethash key seen)
-                                  (member (concatenate 'string (name m) (descriptor m))
-                                          *ldk-object-methods* :test #'string=))
-                         do (setf (gethash key seen) t)
-                            (when (abstract-p m)
-                              (push (list (name m) (descriptor m)) out)))
-                 (loop for super across (or (slot-value class 'interfaces) #())
-                       do (walk super)))))
-      (walk binary))
-    (nreverse out)))
+(defun %ldk-abstract-methods (interfaces)
+  "The (name descriptor) pairs a class implementing INTERFACES (binary names)
+must define: the abstract methods they and their superinterfaces leave
+unimplemented, less Object's. Resolved as for a subclass
+(%ldk-interface-methods), so a default that overrides an abstract method
+inherited along another path is left to run."
+  (dolist (i interfaces)
+    (unless (interface-p (%ldk-class i))
+      (error "~A is a class, not an interface" (substitute #\. #\/ i))))
+  (let ((seen (make-hash-table :test 'equal)))
+    (dolist (m *ldk-object-methods*)
+      (let ((open (position #\( m)))
+        (setf (gethash (%ldk-method-key (subseq m 0 open) (subseq m open)) seen) t)))
+    (loop for (nil name desc m) in (%ldk-interface-methods interfaces seen)
+          when (abstract-p m) collect (list name desc))))
 
 (defun %ldk-method-gf (name desc)
   "The generic function OpenLDK dispatches Java method NAME DESC through."
@@ -711,14 +701,15 @@ first argument when THIS-FIRST."
   (sb-thread:with-mutex (*ldk-proxy-lock*)
     (or (gethash interfaces *ldk-proxy-classes*)
         (let* ((class-sym (intern (format nil "jolt-openldk/Proxy[~{~A~^,~}]" interfaces) :openldk))
-               (supers (cons '|java/lang/Object| (mapcar #'%ldk-class-symbol interfaces)))
-               (methods (remove-duplicates (mapcan #'%ldk-abstract-methods interfaces)
-                                           :test #'string= :from-end t
-                                           :key (lambda (m) (%ldk-method-key (first m) (second m))))))
+               (methods (%ldk-abstract-methods interfaces))
+               (supers (cons '|java/lang/Object| (mapcar #'%ldk-class-symbol interfaces))))
           (eval `(defclass ,class-sym ,supers ((fn-id :initarg :fn-id))))
-          ;; Object.toString goes through getClass(), and there is no Java
-          ;; class behind a class made here, so it would throw
-          ;; ClassNotFoundException wherever Java prints or logs a proxy.
+          ;; getClass() looks the object's class up by this name: answer with
+          ;; Object's Class, since no Java class stands behind this one.
+          (setf (gethash (symbol-name class-sym) *java-classes-by-bin-name*)
+                (%get-java-class-by-bin-name "java/lang/Object" t))
+          ;; Object.toString would print that as java.lang.Object@...; say
+          ;; what the object is instead.
           (let ((label (format nil "jolt-openldk proxy for ~{~A~^, ~}"
                                (mapcar (lambda (i) (substitute #\. #\/ i)) interfaces))))
             (eval `(defmethod |toString()| ((|this| ,class-sym))
@@ -762,52 +753,61 @@ first argument when THIS-FIRST."
       (walk name))
     out))
 
+(defun %ldk-instance-method-p (m)
+  "M is an instance method something can override: not static, a constructor
+or initializer, or private."
+  (not (or (static-p m) (char= (char (name m) 0) #\<) (%ldk-flag-p m #x2))))
+
+(defun %ldk-interface-methods (interfaces seen)
+  "Entries (key name desc method), one per key not in SEEN, for the instance
+methods of INTERFACES (binary names) and their superinterfaces, the
+declaration that wins as in Java: one in an interface that another declaring
+interface extends is overridden by it, so a default there beats the abstract
+one it overrides, and the key is abstract only if what remains is."
+  (let ((all '()) (candidates (make-hash-table :test 'equal)) (order '()) (out '()))
+    (dolist (i interfaces)
+      (dolist (n (cons i (%ldk-superinterfaces i)))
+        (pushnew n all :test #'string=)))
+    (dolist (iname (reverse all))
+      (loop for m across (slot-value (%ldk-class iname) 'methods)
+            for key = (%ldk-method-key (name m) (descriptor m))
+            when (and (%ldk-instance-method-p m) (not (gethash key seen)))
+              do (unless (gethash key candidates) (push key order))
+                 (push (cons iname m) (gethash key candidates))))
+    (dolist (key (reverse order))
+      (let* ((cands (gethash key candidates))
+             ;; Drop a declaration some other candidate's interface overrides.
+             (live (remove-if (lambda (c)
+                                (some (lambda (other)
+                                        (and (not (eq other c))
+                                             (member (car c) (%ldk-superinterfaces (car other))
+                                                     :test #'string=)))
+                                      cands))
+                              cands))
+             (pick (or (find-if-not (lambda (c) (abstract-p (cdr c))) live) (first live))))
+        (push (list key (name (cdr pick)) (descriptor (cdr pick)) (cdr pick)) out)))
+    (nreverse out)))
+
 (defun %ldk-class-method-table (binary)
   "Every instance method an object of class BINARY has, as a list of
 (key name desc method), one per KEY (OpenLDK's method key), the declaration
-that wins as in Java. The superclass chain comes first, nearest class winning.
-A key no class declares goes to the interfaces: a declaration in an interface
-that another declaring interface extends is overridden by it, so a default
-there beats the abstract one it overrides, and the key is abstract only if
-what remains is. Private methods are left out, since they override nothing
-and nothing overrides them."
+that wins as in Java. The superclass chain comes first, nearest class winning,
+then the interfaces for keys no class declares (%ldk-interface-methods).
+Private methods are left out, since they override nothing and nothing
+overrides them."
   (let ((seen (make-hash-table :test 'equal))
         (out '())
-        (chain (%ldk-superclass-chain binary))
-        (candidates (make-hash-table :test 'equal))
-        (order '()))
-    (flet ((instance-method-p (m)
-             (not (or (static-p m) (char= (char (name m) 0) #\<) (%ldk-flag-p m #x2)))))
-      (dolist (c chain)
-        (loop for m across (slot-value c 'methods)
-              for key = (%ldk-method-key (name m) (descriptor m))
-              when (and (instance-method-p m) (not (gethash key seen)))
-                do (setf (gethash key seen) t)
-                   (push (list key (name m) (descriptor m) m) out)))
-      (let ((interfaces '()))
-        (dolist (c chain)
-          (loop for i across (or (slot-value c 'interfaces) #())
-                do (dolist (n (cons i (%ldk-superinterfaces i)))
-                     (pushnew n interfaces :test #'string=))))
-        (dolist (iname (reverse interfaces))
-          (loop for m across (slot-value (%ldk-class iname) 'methods)
-                for key = (%ldk-method-key (name m) (descriptor m))
-                when (and (instance-method-p m) (not (gethash key seen)))
-                  do (unless (gethash key candidates) (push key order))
-                     (push (cons iname m) (gethash key candidates))))
-        (dolist (key (reverse order))
-          (let* ((cands (gethash key candidates))
-                 ;; Drop a declaration some other candidate's interface overrides.
-                 (live (remove-if (lambda (c)
-                                    (some (lambda (other)
-                                            (and (not (eq other c))
-                                                 (member (car c) (%ldk-superinterfaces (car other))
-                                                         :test #'string=)))
-                                          cands))
-                                  cands))
-                 (pick (or (find-if-not (lambda (c) (abstract-p (cdr c))) live) (first live))))
-            (push (list key (name (cdr pick)) (descriptor (cdr pick)) (cdr pick)) out)))))
-    (nreverse out)))
+        (chain (%ldk-superclass-chain binary)))
+    (dolist (c chain)
+      (loop for m across (slot-value c 'methods)
+            for key = (%ldk-method-key (name m) (descriptor m))
+            when (and (%ldk-instance-method-p m) (not (gethash key seen)))
+              do (setf (gethash key seen) t)
+                 (push (list key (name m) (descriptor m) m) out)))
+    (append (nreverse out)
+            (%ldk-interface-methods
+             (loop for c in chain append (coerce (or (slot-value c 'interfaces) #()) 'list))
+             seen))))
 
 (defun %ldk-private-method-named (binary name desc)
   "A private method NAME (with DESC, when given) declared on BINARY or a superclass."

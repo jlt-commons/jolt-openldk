@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `implement` resolves interface methods the way `subclass` does. When a
+  default method overrides an abstract one inherited along another path, as
+  in `interface LK extends L, K` where `K` gives `n()` a default, the default
+  now runs. Before, the abstract method won and Java got the proxy's stub.
+
+- `getClass()` on a proxy answers with `Object`'s `Class` instead of throwing
+  `ClassNotFoundException`.
+
 - `subclass` makes a Java subclass at run time whose methods call Clojure fns,
   for the Java that wants a class rather than an interface: `TimerTask`,
   `AbstractList` and the other collection skeletons, `InputStream`, `Writer`,
