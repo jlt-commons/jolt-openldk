@@ -373,6 +373,26 @@
           (ldk/call-static "Fixture" "onThread" "(Ljava/lang/Runnable;)V" r))
         (is (= :ran (deref where 5000 :timed-out)))))))
 
+(defn- runaway [n] (inc (runaway (inc n))))
+
+(deftest runaway-recursion-in-a-callback-is-a-stack-overflow
+  (when-built
+    (if-not (System/getenv "JOLT_STACK_LIMIT")
+      (println "  (skipping the runaway-recursion test: JOLT_STACK_LIMIT is unset; bb test sets it)")
+      (do
+        (ldk/init! {:classpath classes})
+        (testing "Java can catch it, as the RuntimeException a callback's throw becomes"
+          (ldk/with-ref [r (ldk/implement "java.lang.Runnable" (fn [] (runaway 0)))]
+            (is (re-find #"^caught: the stack limit of \d+ bytes was exceeded"
+                         (ldk/call-static "Fixture" "tryRun" "(Ljava/lang/Runnable;)Ljava/lang/String;" r)))))
+        (testing "and coming back out, it is the original StackOverflowError"
+          (ldk/with-ref [r (ldk/implement "java.lang.Runnable" (fn [] (runaway 0)))]
+            (is (instance? StackOverflowError
+                           (try (ldk/call-static "Fixture" "run" "(Ljava/lang/Runnable;)V" r) nil
+                                (catch Throwable t t))))))
+        (testing "the bridge is still healthy after it"
+          (is (= 3 (ldk/call-static "Fixture" "add" "(II)I" 1 2))))))))
+
 (deftest callback-exceptions-cross-both-ways
   (when-built
     (ldk/init! {:classpath classes})

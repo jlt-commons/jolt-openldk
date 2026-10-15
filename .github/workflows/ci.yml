@@ -14,7 +14,7 @@ on:
 # Pinned, as elsewhere in jlt-commons: "latest" is an API lookup that the
 # parallel jobs would rate-limit, and a new release would change what CI runs.
 env:
-  JOLT_VERSION: "0.8.20"
+  JOLT_VERSION: "0.8.22"
   BB_VERSION: "1.13.225"
   CLJ_KONDO_VERSION: "2026.05.25"
   OCICL_VERSION: "2.20.0"

@@ -16,7 +16,40 @@
               jar (str dir "/fixture-" v ".jar")]
           (fs/create-dirs dir)
           (fs/delete-if-exists jar)
-          (shell (str (java-home) "/bin/jar") "cf" jar "-C" "target/test-classes" ".")))))
+          (shell (str (java-home) "/bin/jar") "cf" jar "-C" "target/test-classes" ".")
+          (spit (str dir "/fixture-" v ".pom")
+                (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                     "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                     "  <modelVersion>4.0.0</modelVersion>\n"
+                     "  <groupId>net.b12n.test</groupId>\n"
+                     "  <artifactId>fixture</artifactId>\n"
+                     "  <version>" v "</version>\n"
+                     "</project>\n"))))
+    ;; net.b12n.test/app 1.0: a Java-only jar whose POM depends on fixture
+    ;; 1.0, for the transitive tests.
+    (let [dir "target/test-m2/net/b12n/test/app/1.0"
+          jar (str dir "/app-1.0.jar")
+          marker "target/test-m2-app/app.txt"]
+      (fs/create-dirs dir)
+      (fs/create-dirs (fs/parent marker))
+      (spit marker "net.b12n.test/app\n")
+      (fs/delete-if-exists jar)
+      (shell (str (java-home) "/bin/jar") "cf" jar "-C" "target/test-m2-app" ".")
+      (spit (str dir "/app-1.0.pom")
+            (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                 "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                 "  <modelVersion>4.0.0</modelVersion>\n"
+                 "  <groupId>net.b12n.test</groupId>\n"
+                 "  <artifactId>app</artifactId>\n"
+                 "  <version>1.0</version>\n"
+                 "  <dependencies>\n"
+                 "    <dependency>\n"
+                 "      <groupId>net.b12n.test</groupId>\n"
+                 "      <artifactId>fixture</artifactId>\n"
+                 "      <version>1.0</version>\n"
+                 "    </dependency>\n"
+                 "  </dependencies>\n"
+                 "</project>\n")))))
 
   info
   {:doc "What each task does"
@@ -43,7 +76,9 @@
            (shell m2 "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.project-test")
            (shell m2 "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.maven-test")
            (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.manifest-test")
-           (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
+           ;; A small stack limit, so the runaway-recursion test ends in
+           ;; under a second rather than at 80% of the heap ceiling.
+           (shell {:extra-env {"JOLT_STACK_LIMIT" "256m"}} "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
            (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
            (shell m2 "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-test")
            (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.patches-test"))}
@@ -99,7 +134,7 @@
                (shell {:extra-env {"JOLT_MAVEN_REPOSITORY" m2}}
                       "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.maven-test")
                (shell "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.manifest-test")
-               (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
+               (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1" "JOLT_STACK_LIMIT" "256m"}}
                       "jolt" "-A:test" "-m" "net.b12n.jolt.openldk-test")
                (shell {:extra-env {"JOLT_OPENLDK_REQUIRE" "1"}}
                       "jolt" "-A:test" "-m" "net.b12n.jolt.openldk.bake-script-test")
