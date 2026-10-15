@@ -564,6 +564,44 @@ happens to the copy, a reply this code can't read included."
         (swap! fns dissoc id)
         (throw t)))))
 
+(defn subclass
+  "A Java object of a subclass of `class-name` made at run time, whose methods
+  named in `methods` call Clojure, as a JavaRef. Abstract or concrete: any class
+  that isn't final, an interface or an enum.
+
+    (subclass \"java.util.TimerTask\" {\"run\" (fn [this] ...)})
+    (subclass \"java.lang.Thread\" \"(Ljava/lang/String;)V\" [\"worker\"]
+              {\"run\" (fn [this] ...)})
+
+  The two-argument form runs the no-argument constructor, the four-argument
+  form the one `ctor-descriptor` names, with `ctor-args`. `methods` maps a
+  method name, or name plus descriptor, to a fn that takes `this` and then the
+  method's arguments. `this` is a JavaRef borrowed for the call, like any
+  object argument. A bare name means the abstract methods of that name, or else
+  the one overridable method of that name; several overloads must be picked by
+  descriptor. Every abstract method is defined, and one without a fn throws a
+  RuntimeException when Java calls it. A key that names nothing overridable,
+  because it is missing, final, static or private, is refused here.
+
+  Java's own methods call the overrides, as they would a Java subclass's.
+  getClass() reports the superclass's Class. call-super runs the superclass's
+  version of a method. Arguments, results, exceptions, threads and release!
+  work as for implement."
+  ([class-name methods] (subclass class-name "()V" [] methods))
+  ([class-name ctor-descriptor ctor-args methods]
+   (when-not (and (map? methods) (every? string? (keys methods)) (every? fn? (vals methods)))
+     (throw (ex-info "jolt-openldk: subclass takes a map of method names to fns" {:methods methods})))
+   (let [id (swap! next-id inc)]
+     (swap! fns assoc id methods)
+     (try
+       (assoc (send! (fn [a] (wire/subclass-request (dotted class-name) ctor-descriptor
+                                                     (stage-args a ctor-descriptor ctor-args)
+                                                     id (keys methods))))
+              :fn-id id)
+       (catch Throwable t
+         (swap! fns dissoc id)
+         (throw t))))))
+
 (defmacro with-ref
   "Bind each name to a JavaRef-producing expression, run body, and release
   every one, on the throwing path too."

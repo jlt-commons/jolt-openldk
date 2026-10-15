@@ -99,6 +99,12 @@
       "only at the end of the message")
   (is (nil? (wire/callback-error-id nil))))
 
+(deftest subclass-requests
+  (is (= "(:subclass \"java.util.TimerTask\" \"()V\" () 7 (\"run\"))"
+         (wire/subclass-request "java.util.TimerTask" "()V" [] 7 ["run"])))
+  (is (= "(:subclass \"java.lang.Thread\" \"(Ljava/lang/String;)V\" ((:s \"w\")) 8 (\"run()V\"))"
+         (wire/subclass-request "java.lang.Thread" "(Ljava/lang/String;)V" ["w"] 8 ["run()V"]))))
+
 (deftest a-java-exception-becomes-ex-info
   (let [e (try (wire/reply->value
                 "(:throw \"java.lang.IllegalStateException\" \"boom: x\" \"java.lang.IllegalStateException: boom: x\")")

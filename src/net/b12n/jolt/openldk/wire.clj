@@ -164,6 +164,13 @@
 
 (defn array-length [r] (str "(:length " (:handle r) ")"))
 
+(defn subclass-request
+  "Make a subclass of `class-name` whose methods named by `method-keys` (the
+  map's keys, as given) call fn `fn-id`, constructed through `descriptor`."
+  [class-name descriptor args fn-id method-keys]
+  (str "(:subclass " (lisp-string class-name) " " (lisp-string descriptor) " " (args->lisp args)
+       " " fn-id " (" (str/join " " (map lisp-string method-keys)) "))"))
+
 (defn proxy-request [interfaces fn-id]
   (str "(:proxy (" (str/join " " (map lisp-string interfaces)) ") " fn-id ")"))
 
