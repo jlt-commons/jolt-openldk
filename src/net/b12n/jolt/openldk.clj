@@ -602,6 +602,15 @@ happens to the copy, a reply this code can't read included."
          (swap! fns dissoc id)
          (throw t))))))
 
+(defn call-super
+  "Call the superclass's version of instance `method` on `obj`, an object
+  `subclass` made, skipping its override: what Java's super.method() does.
+  Usually `obj` is the `this` an override was given."
+  [obj method descriptor & args]
+  (when-not (ref? obj)
+    (throw (ex-info "jolt-openldk: call-super needs a JavaRef as its receiver" {:receiver obj})))
+  (send! (fn [a] (wire/super-request obj method descriptor (stage-args a descriptor args)))))
+
 (defmacro with-ref
   "Bind each name to a JavaRef-producing expression, run body, and release
   every one, on the throwing path too."

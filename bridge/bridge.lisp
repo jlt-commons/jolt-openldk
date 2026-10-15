@@ -23,6 +23,7 @@
 ;;;                                             malloc'd, freed by the caller
 ;;;   (:length id)                              (:ok (:i n))
 ;;;   (:proxy ("java/util/Comparator") fn-id)   (:ok (:ref id "jolt-openldk.Proxy..."))
+;;;   (:super id "name" "()Ljava/lang/String;" (v ...))   (:ok v), the superclass's version
 ;;;   (:subclass "a.B" "()V" (v ...) fn-id ("run" ...))
 ;;;                                             (:ok (:ref id "jolt-openldk.Subclass..."))
 ;;;
@@ -730,6 +731,8 @@ define: its abstract methods and its superinterfaces', less Object's."
 
 (defvar *ldk-subclass-classes* (make-hash-table :test 'equal))
 (defvar *ldk-subclass-count* 0)
+(defvar *ldk-subclass-supers* (make-hash-table :test 'eq)
+  "Each generated subclass's CLOS class symbol, to its superclass's binary name.")
 
 (defun %ldk-flag-p (thing flag)
   (not (zerop (logand flag (slot-value thing 'access-flags)))))
@@ -829,6 +832,7 @@ nothing overridable, or a bare name matching several overloads."
                                                    :lambda-list (cons '|this| params)))
                      (eval `(defmethod ,gf ((|this| ,class-sym) ,@params)
                               (%ldk-upcall |this| ,name ,desc (list ,@params) t))))
+            (setf (gethash class-sym *ldk-subclass-supers*) binary)
             (setf (gethash cache-key *ldk-subclass-classes*) class-sym))))))
 
 (defun %ldk-new-subclass (classname desc values fn-id keys)
@@ -852,6 +856,23 @@ nothing overridable, or a bare name matching several overloads."
                       (%ldk-class-symbol binary)
                       (cons object args))
       (list :ref (%ldk-handle object) (%ldk-class-dotted object)))))
+
+(defun %ldk-call-super (object name desc values)
+  "The superclass's NAME DESC on OBJECT, an instance of a generated subclass,
+through invoke-special so its override is skipped."
+  (let ((binary (gethash (class-name (class-of object)) *ldk-subclass-supers*)))
+    (unless binary
+      (error "call-super needs an object made by subclass, not a ~A" (%ldk-class-dotted object)))
+    (let* ((dotted (substitute #\. #\/ binary))
+           (key (%ldk-method-key name desc))
+           (entry (find key (%ldk-class-method-table binary) :key #'first :test #'string=)))
+      (unless entry (error "no method ~A~A on ~A" name desc dotted))
+      (when (abstract-p (fourth entry)) (error "~A~A is abstract in ~A" name desc dotted))
+      (let ((args (%ldk-args desc values)))
+        (%ldk-result (nth-value 1 (%ldk-split-descriptor desc))
+                     (invoke-special (intern (lispize-method-name (concatenate 'string name desc)) :openldk)
+                                     (%ldk-class-symbol binary)
+                                     (cons object args)))))))
 
 (defun %ldk-sap-utf8 (sap)
   "The NUL-terminated UTF-8 string at SAP."
@@ -1001,6 +1022,8 @@ take this."
       (:length (list :i (length (java-array-data (%ldk-array (first rest))))))
       (:proxy (destructuring-bind (interfaces fn-id) rest
                 (%ldk-new-proxy interfaces fn-id)))
+      (:super (destructuring-bind (id name desc values) rest
+                (%ldk-call-super (%ldk-deref id) name desc values)))
       (:subclass (destructuring-bind (classname desc values fn-id keys) rest
                    (%ldk-new-subclass classname desc values fn-id keys))))))
 

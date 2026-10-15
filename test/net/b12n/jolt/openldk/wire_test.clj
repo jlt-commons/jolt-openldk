@@ -105,6 +105,10 @@
   (is (= "(:subclass \"java.lang.Thread\" \"(Ljava/lang/String;)V\" ((:s \"w\")) 8 (\"run()V\"))"
          (wire/subclass-request "java.lang.Thread" "(Ljava/lang/String;)V" ["w"] 8 ["run()V"]))))
 
+(deftest super-requests
+  (is (= "(:super 4 \"toString\" \"()Ljava/lang/String;\" ())"
+         (wire/super-request (wire/->JavaRef 4 "x") "toString" "()Ljava/lang/String;" []))))
+
 (deftest a-java-exception-becomes-ex-info
   (let [e (try (wire/reply->value
                 "(:throw \"java.lang.IllegalStateException\" \"boom: x\" \"java.lang.IllegalStateException: boom: x\")")
