@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `subclass` makes a Java subclass at run time whose methods call Clojure fns,
+  for the Java that wants a class rather than an interface: `TimerTask`,
+  `AbstractList` and the other collection skeletons, `InputStream`, `Writer`,
+  `Number`, `Thread`. Abstract or concrete superclass, any constructor by
+  descriptor. Each fn takes `this` first. Every abstract method is defined,
+  and a map key naming several overloads, or a method that is missing, final,
+  static or private, is refused when the subclass is made. `call-super` runs
+  the superclass's version of a method, and `getClass()` answers with the
+  superclass's `Class`.
+
 - jolt 0.8.22 or later is required, and CI tests it. It's the release that
   lets the next two things happen.
 

@@ -38,7 +38,7 @@ Everything runs in one process. jolt calls down through a small C shim into SBCL
 ```mermaid
 flowchart TB
   subgraph jolt["jolt process"]
-    api["net.b12n.jolt.openldk<br/>init!, call-static, new-object, call, implement, release!"]
+    api["net.b12n.jolt.openldk<br/>init!, call-static, new-object, call, implement, subclass, release!"]
     wire["net.b12n.jolt.openldk.wire<br/>request text out, reply text back"]
     tramp["upcall trampoline<br/>one :collect-safe ffi/callback"]
     api --> wire
@@ -198,6 +198,30 @@ A fn handles every method, which suits a functional interface. A map picks a fn 
 - Like any JavaRef, the object lives until `release!`, along with its fn. A proxy passed inline and never released stays for the life of the process.
 - `release!` on the object drops its fn as well, so Java calling a stored copy later gets a `RuntimeException` rather than a call into a fn that's gone.
 
+When Java wants a class rather than an interface, `subclass` makes a subclass at run time, abstract superclass or concrete:
+
+```clojure
+(ldk/with-ref [task (ldk/subclass "java.util.TimerTask" {"run" (fn [this] (println "tick"))})]
+  ...)
+
+(ldk/subclass "java.lang.Thread" "(Ljava/lang/String;)V" ["worker-1"]
+              {"run" (fn [this] ...)})
+
+(ldk/subclass "java.util.AbstractList"
+              {"get"      (fn [this i] (* 10 i))
+               "size"     (fn [this] 3)
+               "toString" (fn [this] (str "<" (ldk/call-super this "toString" "()Ljava/lang/String;") ">"))})
+```
+
+The two-argument form runs the no-argument constructor. The four-argument form runs the one its descriptor names, with those arguments, so a superclass that sets fields in its constructor (`Writer` sets `lock`, `TimerTask` its state) is set up as a Java subclass would be. Java's own methods call the overrides: `Writer.write(String)` reaches your `write(char[], int, int)`, `InputStream.read(byte[], int, int)` your `read()`, and a superclass constructor that calls an overridable method reaches your fn too.
+
+- Every fn takes `this` first, then the method's arguments. `this` is a borrowed JavaRef, like any object argument.
+- The map's keys are method names, or a name plus descriptor. A bare name means the abstract methods of that name, or else the one method of that name that can be overridden. Where several overloads could be meant, `"add"` on an `ArrayList` for one, `subclass` refuses and lists their descriptors so you can pick one.
+- Every abstract method is defined, and one with no fn throws a `RuntimeException` naming it when Java calls it. A key naming a method that is missing, final, static or private is refused when the subclass is made, and so are interfaces (use `implement`), final classes, enums, arrays and private constructors.
+- `call-super` runs the superclass's version of a method on the object, skipping your override, as `super.method()` would. It refuses an abstract method, and an object `subclass` didn't make.
+- `getClass()` answers with the superclass's `Class`, so `getClass().getName()` on an `AbstractList` subclass is `java.util.AbstractList`, and `Object`'s `toString` and `hashCode` work. Reflection beyond that describes the superclass too.
+- Arguments, results, exceptions, threads and `release!` work as for `implement`. Java can start a `Thread` subclass and its `run` calls Clojure on that thread, with the same lock caveat.
+
 A Java exception arrives as an `ex-info`:
 
 ```clojure
@@ -269,7 +293,7 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 
 ## What doesn't work yet
 
-- **Implementing a class.** `implement` takes interfaces only. Subclassing an abstract class from Clojure isn't supported.
+- **Subclass limits.** A `subclass` object can't also implement further interfaces, and there's no field access from Clojure for it or any object. Sealed classes aren't refused, because OpenLDK drops the attribute that marks them, so a subclass of one is made anyway.
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. Runaway recursion in a Clojure callback doesn't: since jolt 0.8.22 it throws `StackOverflowError`, which reaches Java as a `RuntimeException` it can catch and comes back out to your call as the original (`JOLT_STACK_LIMIT` sets how deep that is). `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
 - **OpenLDK's own gaps.** It's a young runtime, and anything that fails here may well be OpenLDK rather than the bridge. Two string bugs found while building this were reported upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12) and fixed the next day in `701609f`, which this pins. Two more were found on 2026-10-14, and `bridge/bridge.lisp` carries fixes for both until the pin moves to an OpenLDK that has them. They're sent upstream as [#14](https://github.com/atgreen/openldk/pull/14). Calling an instance method that OpenLDK failed to compile looped forever instead of throwing. And a JDK whose jmods count zip offsets from the start of the file, as 30 of GraalVM CE 25.0.1's do, failed any class lookup that reached one of them. Together they made a constructor that needed a missing class hang the process on that JDK. A third, found the same day, is carried too and sent upstream as [#15](https://github.com/atgreen/openldk/pull/15). OpenLDK stored a string's bytes unsigned where Java's are signed, so a string passed in with a character from U+0080 up, `"hé"` say, encoded to UTF-8 as its Latin-1 bytes and wasn't equal to the same text built in Java. A fourth only showed on macOS: the first use of `java.nio.file`, or `MessageDigest.getInstance`, which reads a security file through it, failed with an undefined function, because OpenLDK had no `NativeLibraries.load`. That fix is carried too, and sent upstream as [#16](https://github.com/atgreen/openldk/pull/16). So is a fifth, also macOS only: OpenLDK loaded zlib as `libz.so.1`, its Linux name, so the first `java.util.zip` call (CRC32, GZIP) killed the process. Sent upstream as [#17](https://github.com/atgreen/openldk/pull/17). And a sixth, on every platform: `Instant.now()` failed because OpenLDK had no `VM.getNanoTimeAdjustment`, which `Date.toString` also reaches in a time zone without a CLDR display name. Carried, and sent upstream as [#18](https://github.com/atgreen/openldk/pull/18). `docs/openldk-upstream-notes.md` has the details.
@@ -313,7 +337,7 @@ The missing-coordinate test in the bake tests contacts Clojars and Maven Central
 
 The patches tests check the two JIT and jmod fixes in `bridge/bridge.lisp` (the OpenLDK tests check the string, `NativeLibraries.load`, zlib and `getNanoTimeAdjustment` fixes), each in a jolt subprocess that a watchdog kills after two minutes, since one of them is about a call that never returned. The jmod check needs a JDK with `jmods/java.prefs.jmod` and skips without one, as on CI's Temurin.
 
-Last run, 2026-10-15, on jolt 0.8.22: wire tests 16 tests and 99 assertions, project tests 21 tests and 30 assertions, maven tests 10 tests and 63 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 33 tests and 285 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
+Last run, 2026-10-15, on jolt 0.8.22: wire tests 18 tests and 102 assertions, project tests 21 tests and 30 assertions, maven tests 10 tests and 63 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 37 tests and 348 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
 
 ## Licence
 
