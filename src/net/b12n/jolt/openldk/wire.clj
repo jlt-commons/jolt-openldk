@@ -175,6 +175,11 @@
   (str "(:super " (:handle r) " " (lisp-string method) " " (lisp-string descriptor) " "
        (args->lisp args) ")"))
 
+(defn get-field-request [r field] (str "(:get-field " (:handle r) " " (lisp-string field) ")"))
+
+(defn set-field-request [r field v]
+  (str "(:set-field " (:handle r) " " (lisp-string field) " " (value->lisp v) ")"))
+
 (defn proxy-request [interfaces fn-id]
   (str "(:proxy (" (str/join " " (map lisp-string interfaces)) ") " fn-id ")"))
 

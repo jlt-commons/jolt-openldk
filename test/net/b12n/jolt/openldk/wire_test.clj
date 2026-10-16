@@ -172,6 +172,10 @@
   (is (= "jolt-openldk: a jolt byte-array can only be passed for a one-dimensional primitive array parameter or as new-array's contents"
          (try (wire/value->lisp (byte-array 0)) nil (catch Exception e (ex-message e))))))
 
+(deftest field-requests
+  (is (= "(:get-field 3 \"x\")" (wire/get-field-request (wire/->JavaRef 3 "x") "x")))
+  (is (= "(:set-field 3 \"x\" (:i 4))" (wire/set-field-request (wire/->JavaRef 3 "x") "x" 4))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.wire-test)]
     (when (pos? (+ fail error)) (System/exit 1))))

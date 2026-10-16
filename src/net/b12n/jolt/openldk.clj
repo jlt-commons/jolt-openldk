@@ -613,6 +613,34 @@ happens to the copy, a reply this code can't read included."
     (throw (ex-info "jolt-openldk: call-super needs a JavaRef as its receiver" {:receiver obj})))
   (send! (fn [a] (wire/super-request obj method descriptor (stage-args a descriptor args)))))
 
+;; --- fields --------------------------------------------------------------------
+;;
+;; No descriptor: the bridge reads the field's type from its class, and a value
+;; converts as an argument or result of that type would.
+
+(defn- field-value
+  "`v` ready for a field write in `arena`: a typed jolt array staged as raw
+  memory, as for a primitive array parameter, anything else as it is."
+  [arena v]
+  (if (wire/primitive-array-kind v) (or (stage arena nil v) (vec v)) v))
+
+(defn get-field
+  "The value of field `field` on JavaRef `obj`, declared on its class or a
+  superclass, the nearest declaration winning."
+  [obj field]
+  (when-not (ref? obj)
+    (throw (ex-info "jolt-openldk: get-field needs a JavaRef as its receiver" {:receiver obj})))
+  (send! (wire/get-field-request obj field)))
+
+(defn set-field!
+  "Set field `field` on JavaRef `obj` to `value`, converted as an argument for
+  a parameter of the field's type. A final field is refused. Returns nil."
+  [obj field value]
+  (when-not (ref? obj)
+    (throw (ex-info "jolt-openldk: set-field! needs a JavaRef as its receiver" {:receiver obj})))
+  (send! (fn [a] (wire/set-field-request obj field (field-value a value))))
+  nil)
+
 (defmacro with-ref
   "Bind each name to a JavaRef-producing expression, run body, and release
   every one, on the throwing path too."
