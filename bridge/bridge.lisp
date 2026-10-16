@@ -539,7 +539,10 @@ can take the element-by-element path, which says which element and why."
                    (fill-from 1 sb-sys:sap-ref-8 (unsigned-byte 8) (if (zerop x) 0 1))))
             (:c32 (when (char= kind #\C)
                     (fill-from 4 sb-sys:signed-sap-ref-32 (unsigned-byte 16) (code-char x)))))
-          (error () nil)))))
+        ;; A float trap (a double too big for a float) or a bad address:
+        ;; the element-by-element path meets the same thing and reports it
+        ;; with the element's index. Anything else is a bug here, and shows.
+        ((or arithmetic-error sb-sys:memory-fault-error) () nil)))))
 
 (defun %ldk-make-array (component values)
   "A Java array whose component has descriptor COMPONENT (I, Ljava/lang/String;,

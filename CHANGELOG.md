@@ -4,11 +4,12 @@
 
 - A primitive array going into Java is read straight from memory into the
   Java array when every element fits, rather than converted one tagged value
-  at a time. A million elements from a typed array now take about 5.5 ms for
-  `int` and 1.7 ms for `byte`, against 64 and 60 ms (`bb bench-arrays`, an M1 Pro
-  Mac), and from a vector about 71 ms against 138, the rest being the
-  vector's own conversion on the jolt side. An element that doesn't fit takes
-  the old path, so errors still name it and its index.
+  at a time. On the second run of `bb bench-arrays` (an M1 Pro), a million
+  elements from a typed array take 5.6 ms for `int` and 1.6 ms for `byte`,
+  against 64.5 and 60.1 ms, and from a vector 71 to 81 ms against 138. A
+  `double` array varies the most: about 7 ms on the first run but 41 to 43 ms
+  on the second, against 37.5 to 55 ms before. An element that doesn't fit
+  takes the old path, so errors still name it and its index.
 
 - `implement` resolves interface methods the way `subclass` does. When a
   default method overrides an abstract one inherited along another path, as
