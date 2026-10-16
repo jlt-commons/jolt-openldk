@@ -1025,7 +1025,12 @@
     (testing "the first read initializes the class, as Java does"
       (is (false? (ldk/call-static "Fixture" "lazyInitRan" "()Z")))
       (is (= 1 (ldk/get-static "Fixture$Lazy" "ran")))
-      (is (true? (ldk/call-static "Fixture" "lazyInitRan" "()Z"))))))
+      (is (true? (ldk/call-static "Fixture" "lazyInitRan" "()Z"))))
+    (testing "and only the class that declares the field"
+      (is (false? (ldk/call-static "Fixture" "subInitDone" "()Z")))
+      (is (= 3 (ldk/get-static "Fixture$InitSub" "bs")))
+      (is (false? (ldk/call-static "Fixture" "subInitDone" "()Z"))
+          "InitSub's initializer doesn't run for a field InitBase declares"))))
 
 (deftest static-field-refusals
   (when-built

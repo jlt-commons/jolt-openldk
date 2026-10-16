@@ -152,6 +152,10 @@ public class Fixture {
     public static boolean lazyRan;
     public static boolean lazyInitRan() { return lazyRan; }
     public static class Lazy { public static int ran = mark(); static int mark() { lazyRan = true; return 1; } }
+    public static boolean subInitRan;
+    public static boolean subInitDone() { return subInitRan; }
+    public static class InitBase { public static int bs = 3; }
+    public static class InitSub extends InitBase { static { subInitRan = true; } }
     public static class Broken { public static int x = 1 / zero(); static int zero() { return 0; } }
 
     private static Runnable stored;
