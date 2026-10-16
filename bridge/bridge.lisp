@@ -26,6 +26,8 @@
 ;;;   (:super id "name" "()Ljava/lang/String;" (v ...))   (:ok v), the superclass's version
 ;;;   (:subclass "a.B" "()V" (v ...) fn-id ("run" ...))
 ;;;                                             (:ok (:ref id "jolt-openldk.Subclass..."))
+;;;   (:get-field id "x")                       (:ok v), by the field's type
+;;;   (:set-field id "x" v)                     (:ok (:void))
 ;;;
 ;;; The other direction, Java calling Clojure, goes through the C function
 ;;; pointer ldk_upcall that jolt installs: (:call fn-id "compare" "(..)I"
@@ -1090,6 +1092,67 @@ fresh instance whose Java class is BINARY's."
     (%eval (list sym argv))
     '(:void)))
 
+;;; --- fields --------------------------------------------------------------------
+;;;
+;;; A field is found in OpenLDK's class metadata, never by its slot: every
+;;; instance also carries its class's static slots (they're :class allocated),
+;;; so a slot existing says nothing about which kind of field it is. An
+;;; instance field is a slot on the object, named by %resolve-field-slot, which
+;;; knows a shadowing field's own slot; a static one is a slot on the class's
+;;; +static-<binary>+ instance.
+
+(defun %ldk-find-field (binary name static-p)
+  "Field NAME as Java resolves it from class BINARY, and the binary name of the
+class declaring it, or NIL. An instance lookup walks loaded superclasses; a
+static one loads and walks the class, then its superinterfaces, then its
+superclass (JVMS 5.4.3.2)."
+  (labels ((walk (b)
+             (let ((class (and b (if static-p
+                                     (classload b)
+                                     (gethash b *ldk-classes-by-bin-name*)))))
+               (when class
+                 (let ((f (find-if (lambda (f) (and f (string= (name f) name))) (fields class))))
+                   (when f (return-from walk (values f b))))
+                 (when static-p
+                   (loop for i across (or (slot-value class 'interfaces) #())
+                         do (multiple-value-bind (f d) (walk i)
+                              (when f (return-from walk (values f d))))))
+                 (walk (super class))))))
+    (walk binary)))
+
+(defun %ldk-field-owner (declaring) (substitute #\. #\/ declaring))
+
+(defun %ldk-instance-field (object name op)
+  "Instance field NAME of OBJECT for request OP (:get-field or :set-field),
+and the binary name of the class declaring it. A subclass object's fields are
+its superclass's."
+  (when (java-array-p object)
+    (if (string= name "length")
+        (error "arrays have no fields; use array-length")
+        (error "no field ~A on ~A" name (%ldk-class-dotted object))))
+  (let ((sym (class-name (class-of object))))
+    (multiple-value-bind (field declaring)
+        (%ldk-find-field (or (gethash sym *ldk-subclass-supers*) (symbol-name sym)) name nil)
+      (unless field (error "no field ~A on ~A" name (%ldk-class-dotted object)))
+      (when (%ldk-flag-p field #x8)
+        (error "~A is a static field of ~A; use ~A" name (%ldk-field-owner declaring)
+               (if (eq op :get-field) "get-static" "set-static!")))
+      (values field declaring))))
+
+(defun %ldk-check-writable (field name declaring)
+  (when (%ldk-flag-p field #x10)
+    (error "~A is final on ~A" name (%ldk-field-owner declaring))))
+
+(defun %ldk-get-field (object name)
+  (multiple-value-bind (field declaring) (%ldk-instance-field object name :get-field)
+    (%ldk-result (descriptor field) (slot-value object (%resolve-field-slot declaring name)))))
+
+(defun %ldk-set-field (object name value)
+  (multiple-value-bind (field declaring) (%ldk-instance-field object name :set-field)
+    (%ldk-check-writable field name declaring)
+    (setf (slot-value object (%resolve-field-slot declaring name)) (%ldk-arg (descriptor field) value))
+    '(:void)))
+
 (defvar *ldk-set-up* nil)
 
 ;; The classpath a baked core was compiled for, or NIL in the shared core.
@@ -1131,7 +1194,10 @@ fresh instance whose Java class is BINARY's."
       (:super (destructuring-bind (id name desc values) rest
                 (%ldk-call-super (%ldk-deref id) name desc values)))
       (:subclass (destructuring-bind (classname desc values fn-id keys) rest
-                   (%ldk-new-subclass classname desc values fn-id keys))))))
+                   (%ldk-new-subclass classname desc values fn-id keys)))
+      (:get-field (destructuring-bind (id name) rest (%ldk-get-field (%ldk-deref id) name)))
+      (:set-field (destructuring-bind (id name value) rest
+                    (%ldk-set-field (%ldk-deref id) name value))))))
 
 (defun %ldk-callback-cause-id (throwable)
   "The error id of the first of THROWABLE's causes that is the RuntimeException

@@ -942,6 +942,71 @@
       (let [ms (ldk/call now "toEpochMilli" "()J")]
         (is (< (abs (- ms (System/currentTimeMillis))) 5000) (str "Instant.now() gave " ms))))))
 
+(deftest instance-fields-read-and-write
+  (when-built
+    (ldk/init! {:classpath classes})
+    (ldk/with-ref [f (ldk/new-object "Fixture$Fields" "()V")]
+      (testing "every type comes out as a method result would"
+        (is (= [42 1099511627776 true \x 1.5 2.5 -3 -300 "hi" nil]
+               (mapv #(ldk/get-field f %) ["n" "l" "z" "c" "f" "d" "b" "s" "str" "o"])))
+        (is (= [1 2] (ldk/array->vec (ldk/get-field f "arr")))))
+      (testing "and goes in as an argument would, seen by Java"
+        (ldk/set-field! f "z" false)
+        (is (false? (ldk/get-field f "z")))
+        (ldk/set-field! f "c" \y)
+        (is (= \y (ldk/get-field f "c")))
+        (ldk/set-field! f "l" Long/MAX_VALUE)
+        (is (= Long/MAX_VALUE (ldk/get-field f "l")))
+        (ldk/set-field! f "d" ##NaN)
+        (is (NaN? (ldk/get-field f "d")))
+        (ldk/set-field! f "str" "héllo")
+        (is (= "héllo" (ldk/get-field f "str")))
+        (ldk/set-field! f "o" 5)
+        (is (= 5 (ldk/get-field f "o")) "boxes as for an Object parameter")
+        (ldk/set-field! f "arr" [3 4 5])
+        (is (= 12 (ldk/call f "sumArr" "()I")))
+        (ldk/set-field! f "arr" (int-array [10 20]))
+        (is (= 30 (ldk/call f "sumArr" "()I")) "a typed array goes in as raw memory")
+        (is (nil? (ldk/set-field! f "str" nil)))
+        (is (nil? (ldk/get-field f "str"))))
+      (testing "the hierarchy and how OpenLDK stores fields"
+        (is (= 5 (ldk/get-field f "inherited")) "declared on the superclass")
+        (is (= 2 (ldk/get-field f "shared")) "the nearest declaration wins")
+        (ldk/set-field! f "shared" 77)
+        (is (= [77 1] [(ldk/call f "readShared" "()I") (ldk/call f "readSuperShared" "()I")]))
+        (is (= 4 (ldk/get-field f "type")) "a name OpenLDK mangles, as it clashes with a Lisp symbol")
+        (ldk/set-field! f "type" 8)
+        (is (= 8 (ldk/get-field f "type")))
+        (is (= 9 (ldk/get-field f "secret")) "access isn't checked")))
+    (testing "a protected field, from inside an override while Java waits"
+      (ldk/with-ref [c (ldk/subclass "Fixture$Counted"
+                                     {"bump" (fn [this] (ldk/set-field! this "count" (inc (ldk/get-field this "count"))))})]
+        (ldk/call c "bump" "()V")
+        (ldk/call c "bump" "()V")
+        (is (= 2 (ldk/call c "count" "()I")))))))
+
+(deftest instance-field-refusals
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))]
+      (ldk/with-ref [f (ldk/new-object "Fixture$Fields" "()V")]
+        (is (re-find #"no field nope on Fixture\$Fields" (msg #(ldk/get-field f "nope"))))
+        (is (re-find #"counter is a static field of Fixture\$Fields; use get-static" (msg #(ldk/get-field f "counter"))))
+        (is (re-find #"counter is a static field of Fixture\$Fields; use set-static!" (msg #(ldk/set-field! f "counter" 1))))
+        (is (re-find #"fin is final on Fixture\$Fields" (msg #(ldk/set-field! f "fin" 4))))
+        (is (= 3 (ldk/get-field f "fin")))
+        (is (re-find #"does not fit a Java int" (msg #(ldk/set-field! f "n" 3000000000))))
+        (is (re-find #"null for parameter I" (msg #(ldk/set-field! f "n" nil))))
+        (ldk/with-ref [xs (ldk/new-object "java.util.ArrayList" "()V")]
+          (is (re-find #"java.util.ArrayList.*Ljava/lang/Runnable;" (msg #(ldk/set-field! f "task" xs)))))
+        (is (nil? (ldk/get-field f "task")) "nothing stored by the refused write")
+        (is (re-find #"get-field needs a JavaRef" (msg #(ldk/get-field "x" "n"))))
+        (is (re-find #"set-field! needs a JavaRef" (msg #(ldk/set-field! "x" "n" 1))))
+        (ldk/with-ref [a (ldk/new-array "I" [1 2])]
+          (is (re-find #"arrays have no fields; use array-length" (msg #(ldk/get-field a "length"))))
+          (is (re-find #"no field size on \[I" (msg #(ldk/get-field a "size")))))
+        (is (= 42 (ldk/get-field f "n")) "the bridge is still healthy")))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)

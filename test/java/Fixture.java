@@ -131,6 +131,29 @@ public class Fixture {
     public static final class Sealed {}
     public static class Hidden { private Hidden() {} public Hidden(int x) {} }
 
+    // Fields read and written from Clojure.
+    public interface Konst { int KONST = 7; }
+    public static class FieldsBase { public int shared = 1; public int inherited = 5; public static int bstat = 11; }
+    public static class Fields extends FieldsBase implements Konst {
+        public int shared = 2;
+        public int n = 42; public long l = 1L << 40; public boolean z = true; public char c = 'x';
+        public float f = 1.5f; public double d = 2.5; public byte b = -3; public short s = -300;
+        public String str = "hi"; public Object o; public int[] arr = {1, 2}; public Runnable task;
+        public int type = 4; private int secret = 9; public final int fin = 3;
+        public static int counter = 100; public static final int MAX = 1 << 20; public static final String NAME = "F!";
+        public static long big = Long.MIN_VALUE;
+        public int readShared() { return shared; }
+        public int readSuperShared() { return super.shared; }
+        public int sumArr() { int t = 0; for (int x : arr) t += x; return t; }
+        public static int readBstat() { return FieldsBase.bstat; }
+        public static int readCounter() { return counter; }
+    }
+    public static abstract class Counted { protected int count; public abstract void bump(); public int count() { return count; } }
+    public static boolean lazyRan;
+    public static boolean lazyInitRan() { return lazyRan; }
+    public static class Lazy { public static int ran = mark(); static int mark() { lazyRan = true; return 1; } }
+    public static class Broken { public static int x = 1 / zero(); static int zero() { return 0; } }
+
     private static Runnable stored;
     public static void store(Runnable r) { stored = r; }
     public static void runStored() { stored.run(); }
