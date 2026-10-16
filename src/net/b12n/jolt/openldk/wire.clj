@@ -227,6 +227,12 @@
   [message error-id]
   (str "(:throw " (lisp-string (str/replace (str message) "\u0000" "")) " " error-id ")"))
 
+(defn exit-reply
+  "Tell Java the callback's own call into Java ended in System.exit, so the
+  exit carries on out through the Java frames that called the callback."
+  [status]
+  (str "(:exit " status ")"))
+
 (defn error-reply [message]
   (str "(:error " (lisp-string (str/replace (str message) "\u0000" "")) ")"))
 
