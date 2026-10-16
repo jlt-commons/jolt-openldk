@@ -158,6 +158,23 @@ public class Fixture {
     public static class InitSub extends InitBase { static { subInitRan = true; } }
     public static class Broken { public static int x = 1 / zero(); static int zero() { return 0; } }
 
+    // Java exiting, which comes back to Clojure as an exception.
+    public static boolean afterExit, exitCaught, exitFinally, hookRan, callbackCaught;
+    public static void exitWith(int n) { System.exit(n); afterExit = true; }
+    public static void exitInTry() { try { System.exit(3); } catch (Throwable t) { exitCaught = true; } finally { exitFinally = true; } }
+    public static void haltWith(int n) { Runtime.getRuntime().halt(n); }
+    public static void exitInThread() throws InterruptedException { Thread t = new Thread(() -> System.exit(7)); t.start(); t.join(); }
+    public static void addHook() { Runtime.getRuntime().addShutdownHook(new Thread(() -> hookRan = true)); }
+    public static synchronized void exitLocked(int n) { System.exit(n); }
+    public static boolean lockFreeFromAnotherThread() throws InterruptedException {
+        boolean[] got = {false};
+        Thread t = new Thread(() -> { synchronized (Fixture.class) { got[0] = true; } });
+        t.start(); t.join(5000); return got[0];
+    }
+    public static void runCatching(Runnable r) { try { r.run(); } catch (Throwable t) { callbackCaught = true; } }
+    public static class ExitInit { static { System.exit(9); } public static int x = 1; }
+    public static class ExitMain { public static void main(String[] args) { System.exit(2); } }
+
     private static Runnable stored;
     public static void store(Runnable r) { stored = r; }
     public static void runStored() { stored.run(); }

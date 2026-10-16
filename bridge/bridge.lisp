@@ -30,6 +30,8 @@
 ;;;   (:set-field id "x" v)                     (:ok (:void))
 ;;;   (:get-static "a.B" "X")                   (:ok v), the class initialized first
 ;;;   (:set-static "a.B" "X" v)                 (:ok (:void))
+;;; Any request may instead get (:exit n): Java called System.exit or
+;;; Runtime.halt with status n, and the process carries on.
 ;;;
 ;;; The other direction, Java calling Clojure, goes through the C function
 ;;; pointer ldk_upcall that jolt installs: (:call fn-id "compare" "(..)I"
@@ -1056,6 +1058,43 @@ take this."
         (dolist (id borrowed)
           (sb-thread:with-mutex (*ldk-handle-lock*) (remhash id *ldk-handles*)))))))
 
+;;; --- exit: Java's System.exit without ending the host --------------------------
+;;;
+;;; System.exit, Runtime.exit and Runtime.halt reach Shutdown.exit(I) or
+;;; Shutdown.halt(I); both are replaced, before Shutdown logs, takes its lock or
+;;; runs hooks, by a function that signals instead. On a thread inside a bridge
+;;; request the signal is LDK-JAVA-EXIT, a serious-condition but not an error,
+;;; so nothing between it and %ldk-handle-request stops it: OpenLDK compiles
+;;; Java's catch and finally as handlers for Java's own conditions, and %clinit
+;;; would wrap any error in ExceptionInInitializerError. On a thread Java
+;;; started, no request is waiting to hear about it, so the signal is an error,
+;;; which OpenLDK's thread runner catches: that thread ends, with a line on
+;;; stderr, and the process carries on.
+
+(define-condition ldk-java-exit (serious-condition)
+  ((status :initarg :status :reader ldk-exit-status))
+  (:report (lambda (c s) (format s "Java called exit(~D)" (ldk-exit-status c)))))
+
+(define-condition ldk-java-exit-on-thread (error)
+  ((status :initarg :status :reader ldk-exit-status))
+  (:report (lambda (c s) (format s "Java called exit(~D) on a thread of its own; that thread ended"
+                                 (ldk-exit-status c)))))
+
+(defvar *ldk-in-request* nil
+  "T on a thread while it serves a bridge request (%ldk-handle-request).")
+
+(defun %ldk-signal-exit (status)
+  (error (if *ldk-in-request* 'ldk-java-exit 'ldk-java-exit-on-thread) :status status))
+
+;; The table applies when OpenLDK installs Shutdown's methods; setting the
+;; functions too covers a core where that already happened.
+(dolist (name '("exit" "halt"))
+  (let ((key (format nil "java/lang/Shutdown.~A(I)" name)))
+    (setf (gethash (concatenate 'string key "V") *native-overrides*) #'%ldk-signal-exit)
+    (let ((sym (find-symbol key :openldk)))
+      (when (and sym (fboundp sym))
+        (setf (symbol-function sym) #'%ldk-signal-exit)))))
+
 ;;; --- requests ----------------------------------------------------------------
 
 (defun %ldk-invoke (receiver name desc values)
@@ -1312,9 +1351,12 @@ a reply ever holds."
 (defun %ldk-handle-request (text)
   (%ldk-print-reply
    (handler-case
-       (let ((reply (%ldk-dispatch (%ldk-read-request text))))
+       (let ((reply (let ((*ldk-in-request* t)) (%ldk-dispatch (%ldk-read-request text)))))
          (finish-output)
          (list :ok reply))
+     (ldk-java-exit (c)
+       (finish-output)
+       (list :exit (ldk-exit-status c)))
      (|condition-java/lang/Throwable| (c)
        (finish-output)
        (handler-case (%ldk-throwable-reply c)
