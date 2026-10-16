@@ -178,6 +178,11 @@
   (is (= "(:get-static \"a.B\" \"X\")" (wire/get-static-request "a.B" "X")))
   (is (= "(:set-static \"a.B\" \"X\" (:z :true))" (wire/set-static-request "a.B" "X" true))))
 
+(deftest exit-replies
+  (let [e (try (wire/reply->value "(:exit 3)") nil (catch Exception e e))]
+    (is (= 3 (:java/exit (ex-data e))))
+    (is (re-find #"Java called exit\(3\); the process keeps running" (ex-message e)))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.wire-test)]
     (when (pos? (+ fail error)) (System/exit 1))))

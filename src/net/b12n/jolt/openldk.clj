@@ -520,9 +520,14 @@ happens to the copy, a reply this code can't read included."
 (defn array-length [arr] (send! (wire/array-length arr)))
 
 (defn run-main
-  "Run `class-name`'s public static void main(String[]) with string `args`."
+  "Run `class-name`'s public static void main(String[]) with string `args`.
+  Returns nil, or the status when main ends by calling System.exit, which
+  here ends main rather than the process."
   [class-name & args]
-  (send! (wire/run-main (dotted class-name) (map str args))))
+  (try
+    (send! (wire/run-main (dotted class-name) (map str args)))
+    (catch clojure.lang.ExceptionInfo e
+      (if-some [status (:java/exit (ex-data e))] status (throw e)))))
 
 (defn release!
   "Let OpenLDK collect the object behind `obj`. Using it afterwards, or

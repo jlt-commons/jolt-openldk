@@ -1046,6 +1046,30 @@
         (is (= "java.lang.ExceptionInInitializerError" (:java/class (ex-data e))) (pr-str (ex-data e))))
       (is (= 2147483647 (ldk/get-static "java.lang.Integer" "MAX_VALUE")) "the bridge is still healthy"))))
 
+(deftest java-exit-comes-back-as-an-exception
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [exit-of #(:java/exit (ex-data (thrown %)))]
+      (ldk/with-ref [kept (ldk/new-object "java.lang.StringBuilder" "(Ljava/lang/String;)V" "still here")]
+        (is (= 4 (exit-of #(ldk/call-static "Fixture" "exitWith" "(I)V" 4))))
+        (is (false? (ldk/get-static "Fixture" "afterExit")) "nothing after exit ran")
+        (is (= -1 (exit-of #(ldk/call-static "Fixture" "exitWith" "(I)V" -1))))
+        (is (= 3 (exit-of #(ldk/call-static "Fixture" "exitInTry" "()V"))))
+        (is (= [false false] [(ldk/get-static "Fixture" "exitCaught") (ldk/get-static "Fixture" "exitFinally")])
+            "Java's catch and finally don't see it, as on the JVM")
+        (is (= 5 (exit-of #(ldk/call-static "Fixture" "haltWith" "(I)V" 5))))
+        (is (= 9 (exit-of #(ldk/get-static "Fixture$ExitInit" "x"))) "from a static initializer")
+        (is (= 6 (exit-of #(ldk/call-static "Fixture" "exitLocked" "(I)V" 6))))
+        (is (true? (ldk/call-static "Fixture" "lockFreeFromAnotherThread" "()Z")) "the monitor was released")
+        (ldk/call-static "Fixture" "addHook" "()V")
+        (is (= 1 (exit-of #(ldk/call-static "Fixture" "exitWith" "(I)V" 1))))
+        (is (false? (ldk/get-static "Fixture" "hookRan")) "shutdown hooks don't run; the process isn't ending")
+        (is (nil? (ldk/call-static "Fixture" "addHook" "()V")) "and another can still be added")
+        (is (nil? (ldk/call-static "Fixture" "exitInThread" "()V")) "an exit on a Java thread ends that thread only")
+        (is (= "still here" (ldk/to-string kept)) "handles made before survive")))
+    (is (= 2 (ldk/run-main "Fixture$ExitMain")))
+    (is (nil? (ldk/run-main "Fixture" "a" "b")))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)

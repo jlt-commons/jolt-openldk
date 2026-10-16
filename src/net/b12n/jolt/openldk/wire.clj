@@ -264,7 +264,8 @@
   A Java exception becomes an ex-info carrying :java/class, :java/message (nil
   when Java's getMessage was null) and :java/string, its toString. Anything
   the bridge itself refused, a missing class or a wrong argument count, carries
-  :openldk/error instead. When one of the exception's causes is a callback's
+  :openldk/error instead, and Java's System.exit or Runtime.halt :java/exit
+  with the status. When one of the exception's causes is a callback's
   throw, :openldk/callback-error carries its error id, for the client to swap
   for the original throwable."
   [text]
@@ -276,4 +277,6 @@
                                         :java/string c}
                                  (integer? d) (assoc :openldk/callback-error d))))
       :error (throw (ex-info (str "jolt-openldk: " a) {:openldk/error a}))
+      :exit (throw (ex-info (str "jolt-openldk: Java called exit(" a "); the process keeps running")
+                            {:java/exit a}))
       (throw (ex-info "jolt-openldk: an unreadable reply" {:reply reply :text text})))))
