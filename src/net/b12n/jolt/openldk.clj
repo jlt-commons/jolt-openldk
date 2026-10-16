@@ -24,8 +24,10 @@
   object, returned arrays included, comes back as a JavaRef, a handle that
   keeps the object alive until `release!`; read an array with `array->vec`, or
   a numeric one with `array->primitive`. A Java exception is an ex-info with
-  :java/class, :java/message and :java/string. Java calls Clojure through
-  `implement` (interfaces) and `subclass` (a class, abstract or not).
+  :java/class, :java/message and :java/string. Fields are read and written,
+  with no descriptor, through `get-field`/`set-field!` and
+  `get-static`/`set-static!`. Java calls Clojure through `implement`
+  (interfaces) and `subclass` (a class, abstract or not).
 
   One OpenLDK per process, set up once with one classpath, and no shutdown.
   Calls are serialised: OpenLDK's own thread-safety is not established, so
