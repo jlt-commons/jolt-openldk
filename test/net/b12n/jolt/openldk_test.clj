@@ -1007,6 +1007,40 @@
           (is (re-find #"no field size on \[I" (msg #(ldk/get-field a "size")))))
         (is (= 42 (ldk/get-field f "n")) "the bridge is still healthy")))))
 
+(deftest static-fields-read-and-write
+  (when-built
+    (ldk/init! {:classpath classes})
+    (testing "constants, from the JDK, the class and an interface"
+      (is (= 2147483647 (ldk/get-static "java.lang.Integer" "MAX_VALUE")))
+      (is (= 2147483647 (ldk/get-static "java/lang/Integer" "MAX_VALUE")) "slashed works too")
+      (is (= [1048576 "F!" Long/MIN_VALUE] (mapv #(ldk/get-static "Fixture$Fields" %) ["MAX" "NAME" "big"])))
+      (is (= 7 (ldk/get-static "Fixture$Fields" "KONST")) "an interface constant through the class")
+      (is (= 7 (ldk/get-static "Fixture$Konst" "KONST"))))
+    (testing "writes Java sees"
+      (is (nil? (ldk/set-static! "Fixture$Fields" "counter" 101)))
+      (is (= 101 (ldk/call-static "Fixture$Fields" "readCounter" "()I")))
+      (ldk/set-static! "Fixture$Fields" "bstat" 12)
+      (is (= 12 (ldk/call-static "Fixture$Fields" "readBstat" "()I"))
+          "an inherited static, written through the subclass, is the superclass's"))
+    (testing "the first read initializes the class, as Java does"
+      (is (false? (ldk/call-static "Fixture" "lazyInitRan" "()Z")))
+      (is (= 1 (ldk/get-static "Fixture$Lazy" "ran")))
+      (is (true? (ldk/call-static "Fixture" "lazyInitRan" "()Z"))))))
+
+(deftest static-field-refusals
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))]
+      (is (re-find #"no static field nope on Fixture\$Fields" (msg #(ldk/get-static "Fixture$Fields" "nope"))))
+      (is (re-find #"n is an instance field of Fixture\$Fields; use get-field" (msg #(ldk/get-static "Fixture$Fields" "n"))))
+      (is (re-find #"n is an instance field of Fixture\$Fields; use set-field!" (msg #(ldk/set-static! "Fixture$Fields" "n" 1))))
+      (is (re-find #"MAX is final on Fixture\$Fields" (msg #(ldk/set-static! "Fixture$Fields" "MAX" 1))))
+      (is (= 1048576 (ldk/get-static "Fixture$Fields" "MAX")) "unchanged")
+      (is (re-find #"class not found: Nope" (msg #(ldk/get-static "Nope" "x"))))
+      (let [e (thrown #(ldk/get-static "Fixture$Broken" "x"))]
+        (is (= "java.lang.ExceptionInInitializerError" (:java/class (ex-data e))) (pr-str (ex-data e))))
+      (is (= 2147483647 (ldk/get-static "java.lang.Integer" "MAX_VALUE")) "the bridge is still healthy"))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)

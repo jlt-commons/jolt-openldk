@@ -180,6 +180,12 @@
 (defn set-field-request [r field v]
   (str "(:set-field " (:handle r) " " (lisp-string field) " " (value->lisp v) ")"))
 
+(defn get-static-request [class-name field]
+  (str "(:get-static " (lisp-string class-name) " " (lisp-string field) ")"))
+
+(defn set-static-request [class-name field v]
+  (str "(:set-static " (lisp-string class-name) " " (lisp-string field) " " (value->lisp v) ")"))
+
 (defn proxy-request [interfaces fn-id]
   (str "(:proxy (" (str/join " " (map lisp-string interfaces)) ") " fn-id ")"))
 

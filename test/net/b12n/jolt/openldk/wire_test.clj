@@ -174,7 +174,9 @@
 
 (deftest field-requests
   (is (= "(:get-field 3 \"x\")" (wire/get-field-request (wire/->JavaRef 3 "x") "x")))
-  (is (= "(:set-field 3 \"x\" (:i 4))" (wire/set-field-request (wire/->JavaRef 3 "x") "x" 4))))
+  (is (= "(:set-field 3 \"x\" (:i 4))" (wire/set-field-request (wire/->JavaRef 3 "x") "x" 4)))
+  (is (= "(:get-static \"a.B\" \"X\")" (wire/get-static-request "a.B" "X")))
+  (is (= "(:set-static \"a.B\" \"X\" (:z :true))" (wire/set-static-request "a.B" "X" true))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.wire-test)]
