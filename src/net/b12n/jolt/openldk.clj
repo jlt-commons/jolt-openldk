@@ -123,7 +123,9 @@
       (try
         (wire/ok-reply descriptor (apply f args))
         (catch Throwable t
-          (wire/throw-reply (or (ex-message t) (str t)) (keep-error! t)))))
+          (if-some [status (:java/exit (ex-data t))]
+            (wire/exit-reply status)
+            (wire/throw-reply (or (ex-message t) (str t)) (keep-error! t))))))
     (catch Throwable t
       (wire/error-reply (str "jolt-openldk callback: " (or (ex-message t) t))))))
 

@@ -1070,6 +1070,17 @@
     (is (= 2 (ldk/run-main "Fixture$ExitMain")))
     (is (nil? (ldk/run-main "Fixture" "a" "b")))))
 
+(deftest java-exit-crosses-callbacks
+  (when-built
+    (ldk/init! {:classpath classes})
+    (ldk/with-ref [r (ldk/implement "java.lang.Runnable" (fn [] (ldk/call-static "Fixture" "exitWith" "(I)V" 8)))]
+      (is (= 8 (:java/exit (ex-data (thrown #(ldk/call-static "Fixture" "runCatching" "(Ljava/lang/Runnable;)V" r))))))
+      (is (false? (ldk/get-static "Fixture" "callbackCaught")) "the Java between didn't catch it"))
+    (ldk/with-ref [r (ldk/implement "java.lang.Runnable" (fn [] (throw (ex-info "plain" {}))))]
+      (is (nil? (ldk/call-static "Fixture" "runCatching" "(Ljava/lang/Runnable;)V" r)))
+      (is (true? (ldk/get-static "Fixture" "callbackCaught"))
+          "an ordinary throw is still a RuntimeException Java can catch"))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)

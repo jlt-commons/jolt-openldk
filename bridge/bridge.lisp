@@ -35,8 +35,8 @@
 ;;;
 ;;; The other direction, Java calling Clojure, goes through the C function
 ;;; pointer ldk_upcall that jolt installs: (:call fn-id "compare" "(..)I"
-;;; (v ...)) out, and (:ok v), (:throw "message" error-id) or (:error "msg")
-;;; back.
+;;; (v ...)) out, and (:ok v), (:throw "message" error-id), (:error "msg") or
+;;; (:exit n) back.
 ;;;   (:release id)                             (:ok (:void))
 ;;;
 ;;; Values: (:i n) (:d x) (:nan) (:inf 1|-1) (:z :true|:false) (:c code) (:s "text")
@@ -1054,7 +1054,9 @@ take this."
                               converted))))
                (:throw (%ldk-throw-runtime
                         (format nil "~A [jolt-openldk callback error ~D]" (second reply) (third reply))))
-               (:error (%ldk-throw-runtime (second reply)))))
+               (:error (%ldk-throw-runtime (second reply)))
+               ;; The fn's own call into Java exited: carry on out.
+               (:exit (%ldk-signal-exit (second reply)))))
         (dolist (id borrowed)
           (sb-thread:with-mutex (*ldk-handle-lock*) (remhash id *ldk-handles*)))))))
 

@@ -181,7 +181,8 @@
 (deftest exit-replies
   (let [e (try (wire/reply->value "(:exit 3)") nil (catch Exception e e))]
     (is (= 3 (:java/exit (ex-data e))))
-    (is (re-find #"Java called exit\(3\); the process keeps running" (ex-message e)))))
+    (is (re-find #"Java called exit\(3\); the process keeps running" (ex-message e))))
+  (is (= "(:exit 8)" (wire/exit-reply 8))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.wire-test)]
