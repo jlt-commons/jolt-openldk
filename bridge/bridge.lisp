@@ -1160,7 +1160,9 @@ its superclass's."
 :set-static), the binary name of the class declaring it, initialized, and the
 instance holding its slot."
   (let ((binary (substitute #\/ #\. classname)))
-    (%ldk-class binary)
+    ;; Loaded, not initialized: Java initializes only the declaring class
+    ;; (JLS 12.4.1), below.
+    (unless (classload binary) (error "class not found: ~A" classname))
     (multiple-value-bind (field declaring) (%ldk-find-field binary name t)
       (unless field (error "no static field ~A on ~A" name (%ldk-field-owner binary)))
       (unless (%ldk-flag-p field #x8)
