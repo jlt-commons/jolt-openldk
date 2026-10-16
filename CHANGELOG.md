@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A primitive array going into Java is read straight from memory into the
+  Java array when every element fits, rather than converted one tagged value
+  at a time. A million elements from a typed array now take about 5.5 ms for
+  `int` and 1.7 ms for `byte`, against 64 and 60 ms (`bb bench-arrays`, an M1 Pro
+  Mac), and from a vector about 71 ms against 138, the rest being the
+  vector's own conversion on the jolt side. An element that doesn't fit takes
+  the old path, so errors still name it and its index.
+
 - `implement` resolves interface methods the way `subclass` does. When a
   default method overrides an abstract one inherited along another path, as
   in `interface LK extends L, K` where `K` gives `n()` a default, the default
