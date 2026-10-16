@@ -500,12 +500,60 @@ chars as int32 code points."
         (:c32 (each 4 (lambda (o) (list :c (sb-sys:signed-sap-ref-32 sap o)))))
         (t (error "unknown raw array carrier ~S" carrier))))))
 
+(defun %ldk-raw-contents (kind carrier address n)
+  "The N elements of a (:raw-array CARRIER ADDRESS N) value as the data of a
+Java array of primitive KIND, read straight from memory. NIL when an element
+doesn't fit KIND, or CARRIER isn't one a KIND argument takes, so the caller
+can take the element-by-element path, which says which element and why."
+  (let ((sap (sb-sys:int-sap address))
+        (out (make-array n)))
+    (macrolet ((fill-from (width read type convert)
+                 `(dotimes (i n out)
+                    (let ((x (,read sap (* i ,width))))
+                      (unless (typep x ',type) (return nil))
+                      (setf (svref out i) ,convert)))))
+      (handler-case
+          (case carrier
+            ((:i8 :i16 :i32 :i64)
+             (macrolet ((each-width (type convert)
+                          `(ecase carrier
+                             (:i8 (fill-from 1 sb-sys:signed-sap-ref-8 ,type ,convert))
+                             (:i16 (fill-from 2 sb-sys:signed-sap-ref-16 ,type ,convert))
+                             (:i32 (fill-from 4 sb-sys:signed-sap-ref-32 ,type ,convert))
+                             (:i64 (fill-from 8 sb-sys:signed-sap-ref-64 ,type ,convert)))))
+               (case kind
+                 (#\I (each-width (signed-byte 32) x))
+                 (#\J (each-width (signed-byte 64) x))
+                 (#\S (each-width (signed-byte 16) x))
+                 (#\B (each-width (signed-byte 8) x))
+                 (#\C (each-width (unsigned-byte 16) (code-char x)))
+                 (#\F (each-width integer (coerce x 'single-float)))
+                 (#\D (each-width integer (coerce x 'double-float))))))
+            (:f32 (case kind
+                    (#\F (fill-from 4 sb-sys:sap-ref-single single-float x))
+                    (#\D (fill-from 4 sb-sys:sap-ref-single single-float (coerce x 'double-float)))))
+            (:f64 (case kind
+                    (#\D (fill-from 8 sb-sys:sap-ref-double double-float x))
+                    (#\F (fill-from 8 sb-sys:sap-ref-double double-float (coerce x 'single-float)))))
+            (:z8 (when (char= kind #\Z)
+                   (fill-from 1 sb-sys:sap-ref-8 (unsigned-byte 8) (if (zerop x) 0 1))))
+            (:c32 (when (char= kind #\C)
+                    (fill-from 4 sb-sys:signed-sap-ref-32 (unsigned-byte 16) (code-char x)))))
+          (error () nil)))))
+
 (defun %ldk-make-array (component values)
   "A Java array whose component has descriptor COMPONENT (I, Ljava/lang/String;,
 [I ...), holding wire VALUES converted as arguments of that type. VALUES is a
 list of wire values or a (:raw-array carrier address n) form."
   (%ldk-check-field component)
   (when (eq (first values) :raw-array)
+    (destructuring-bind (carrier address n) (rest values)
+      (let ((data (and (= (length component) 1) (integerp n) (plusp n) (not (eql address 0))
+                       (%ldk-raw-contents (char component 0) carrier address n))))
+        (when data
+          (return-from %ldk-make-array
+            (make-java-array-default :component-class (%bin-type-name-to-class component)
+                                     :data data)))))
     (setf values (apply #'%ldk-raw-values (rest values))))
   (let ((elements (loop for v in values
                         for i from 0
