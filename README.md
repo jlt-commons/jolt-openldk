@@ -154,6 +154,23 @@ Methods are named the way JNI names them, a name plus a descriptor, because Java
 
 A JavaRef keeps its object alive until `release!`. `with-ref` releases on the throwing path too. Every call that returns an object hands back a new handle, including one that returns the same object (`StringBuilder.append`), so release those as well.
 
+Fields need no descriptor, because the bridge reads each field's type from its class. A value read comes back as a result of that type would, and a value written converts as an argument for a parameter of that type, with the same range checks and refusals:
+
+```clojure
+(ldk/get-static "java.lang.Integer" "MAX_VALUE")          ;=> 2147483647
+(ldk/with-ref [p (ldk/new-object "java.awt.Point" "(II)V" 3 4)]
+  (ldk/set-field! p "x" 10)
+  (ldk/get-field p "x"))                                  ;=> 10
+(ldk/set-static! "com.example.Config" "verbose" true)
+```
+
+- `get-field` and `set-field!` find the field on the object's class or a superclass, the nearest declaration winning, so a field that hides a superclass's field is the one you get. There's no way to name the superclass to reach the hidden one.
+- `get-static` and `set-static!` look where the JVM does: the class, then its interfaces, then its superclass. An interface constant reached through a class that implements it works. The first access runs the declaring class's static initializer, and only that class's, as in Java.
+- A final field is refused for writing, static or not. Java copies compile-time constants into every class that uses them, so a write would be seen by some readers and not others.
+- Access isn't checked: private and protected fields work, as private methods do through `call`. A protected field is often what a `subclass` override needs, through its `this`.
+- A static field read through `get-field`, or an instance field through `get-static`, is an error naming the other function, and so is `length` on an array (use `array-length`).
+- `set-field!` and `set-static!` return nil.
+
 Arrays go in as vectors and come back as handles, because an array is mutable and Java may keep it:
 
 ```clojure
@@ -293,10 +310,11 @@ On an Apple M1 Pro, 2026-10-09 unless a line says otherwise:
 
 ## What doesn't work yet
 
-- **Subclass limits.** A `subclass` object can't also implement further interfaces, and there's no field access from Clojure for it or any object. Sealed classes aren't refused, because OpenLDK drops the attribute that marks them, so a subclass of one is made anyway.
+- **Subclass limits.** A `subclass` object can't also implement further interfaces. Sealed classes aren't refused, because OpenLDK drops the attribute that marks them, so a subclass of one is made anyway.
 - **Concurrency.** Calls are serialised behind one lock, because OpenLDK's own thread safety hasn't been looked at.
 - **Some failures take the host down.** Java's `System.exit` exits the jolt process, since it is the only process there is (measured; `Runtime.halt` presumably does too, untested). So does SBCL on heap exhaustion or a corrupt core. Runaway recursion in a Clojure callback doesn't: since jolt 0.8.22 it throws `StackOverflowError`, which reaches Java as a `RuntimeException` it can catch and comes back out to your call as the original (`JOLT_STACK_LIMIT` sets how deep that is). `ldk_init` checks the core can be opened, and `init!` checks JAVA_HOME, before either reaches SBCL. Nothing else is covered. The heap is a fixed 8 GB reservation.
 - **OpenLDK's own gaps.** It's a young runtime, and anything that fails here may well be OpenLDK rather than the bridge. Two string bugs found while building this were reported upstream as [#13](https://github.com/atgreen/openldk/issues/13) and [#12](https://github.com/atgreen/openldk/issues/12) and fixed the next day in `701609f`, which this pins. Two more were found on 2026-10-14, and `bridge/bridge.lisp` carries fixes for both until the pin moves to an OpenLDK that has them. They're sent upstream as [#14](https://github.com/atgreen/openldk/pull/14). Calling an instance method that OpenLDK failed to compile looped forever instead of throwing. And a JDK whose jmods count zip offsets from the start of the file, as 30 of GraalVM CE 25.0.1's do, failed any class lookup that reached one of them. Together they made a constructor that needed a missing class hang the process on that JDK. A third, found the same day, is carried too and sent upstream as [#15](https://github.com/atgreen/openldk/pull/15). OpenLDK stored a string's bytes unsigned where Java's are signed, so a string passed in with a character from U+0080 up, `"hé"` say, encoded to UTF-8 as its Latin-1 bytes and wasn't equal to the same text built in Java. A fourth only showed on macOS: the first use of `java.nio.file`, or `MessageDigest.getInstance`, which reads a security file through it, failed with an undefined function, because OpenLDK had no `NativeLibraries.load`. That fix is carried too, and sent upstream as [#16](https://github.com/atgreen/openldk/pull/16). So is a fifth, also macOS only: OpenLDK loaded zlib as `libz.so.1`, its Linux name, so the first `java.util.zip` call (CRC32, GZIP) killed the process. Sent upstream as [#17](https://github.com/atgreen/openldk/pull/17). And a sixth, on every platform: `Instant.now()` failed because OpenLDK had no `VM.getNanoTimeAdjustment`, which `Date.toString` also reaches in a time zone without a CLDR display name. Carried, and sent upstream as [#18](https://github.com/atgreen/openldk/pull/18). `docs/openldk-upstream-notes.md` has the details.
+- **A failed static initializer isn't remembered.** OpenLDK marks a class initialized before its static initializer runs and doesn't record a failure. So the first access to a class whose initializer throws gets the `ExceptionInInitializerError`, but later ones, from Clojure or from Java, see the class as initialized, with its static fields at their defaults, where Java would throw `NoClassDefFoundError`. Relatedly, a static field that hides an instance field of the same name in a superclass shares that field's storage in OpenLDK, so it reads wrongly. Both are OpenLDK's behaviour, not the bridge's, and aren't reported upstream yet.
 - **stdout ordering.** Java's `System.out` and jolt's `*out*` share file descriptor 1 but buffer separately. The bridge flushes after every call, but output written during a call can still land before output jolt had buffered before it.
 
 ## Platforms
@@ -337,7 +355,7 @@ The missing-coordinate test in the bake tests contacts Clojars and Maven Central
 
 The patches tests check the two JIT and jmod fixes in `bridge/bridge.lisp` (the OpenLDK tests check the string, `NativeLibraries.load`, zlib and `getNanoTimeAdjustment` fixes), each in a jolt subprocess that a watchdog kills after two minutes, since one of them is about a call that never returned. The jmod check needs a JDK with `jmods/java.prefs.jmod` and skips without one, as on CI's Temurin.
 
-Last run, 2026-10-15, on jolt 0.8.22: wire tests 18 tests and 102 assertions, project tests 21 tests and 30 assertions, maven tests 10 tests and 63 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 37 tests and 348 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
+Last run, 2026-10-16, on jolt 0.8.22: wire tests 19 tests and 106 assertions, project tests 21 tests and 30 assertions, maven tests 10 tests and 63 assertions, manifest tests 11 tests and 40 assertions, OpenLDK tests 42 tests and 438 assertions, bake-script tests 6 tests and 29 assertions, bake tests 15 tests and 61 assertions, patches tests 2 tests and 3 assertions, all passing.
 
 ## Licence
 
