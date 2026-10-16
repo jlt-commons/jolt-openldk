@@ -28,6 +28,8 @@
 ;;;                                             (:ok (:ref id "jolt-openldk.Subclass..."))
 ;;;   (:get-field id "x")                       (:ok v), by the field's type
 ;;;   (:set-field id "x" v)                     (:ok (:void))
+;;;   (:get-static "a.B" "X")                   (:ok v), the class initialized first
+;;;   (:set-static "a.B" "X" v)                 (:ok (:void))
 ;;;
 ;;; The other direction, Java calling Clojure, goes through the C function
 ;;; pointer ldk_upcall that jolt installs: (:call fn-id "compare" "(..)I"
@@ -1153,6 +1155,32 @@ its superclass's."
     (setf (slot-value object (%resolve-field-slot declaring name)) (%ldk-arg (descriptor field) value))
     '(:void)))
 
+(defun %ldk-static-field (classname name op)
+  "Static field NAME of class CLASSNAME for request OP (:get-static or
+:set-static), the binary name of the class declaring it, initialized, and the
+instance holding its slot."
+  (let ((binary (substitute #\/ #\. classname)))
+    (%ldk-class binary)
+    (multiple-value-bind (field declaring) (%ldk-find-field binary name t)
+      (unless field (error "no static field ~A on ~A" name (%ldk-field-owner binary)))
+      (unless (%ldk-flag-p field #x8)
+        (error "~A is an instance field of ~A; use ~A" name (%ldk-field-owner declaring)
+               (if (eq op :get-static) "get-field" "set-field!")))
+      (%ldk-class declaring)
+      (values field declaring
+              (symbol-value (find-symbol (format nil "+static-~A+" declaring) (class-package declaring)))))))
+
+(defun %ldk-get-static (classname name)
+  (multiple-value-bind (field declaring holder) (%ldk-static-field classname name :get-static)
+    (declare (ignore declaring))
+    (%ldk-result (descriptor field) (slot-value holder (intern (mangle-field-name name) :openldk)))))
+
+(defun %ldk-set-static (classname name value)
+  (multiple-value-bind (field declaring holder) (%ldk-static-field classname name :set-static)
+    (%ldk-check-writable field name declaring)
+    (setf (slot-value holder (intern (mangle-field-name name) :openldk)) (%ldk-arg (descriptor field) value))
+    '(:void)))
+
 (defvar *ldk-set-up* nil)
 
 ;; The classpath a baked core was compiled for, or NIL in the shared core.
@@ -1197,7 +1225,10 @@ its superclass's."
                    (%ldk-new-subclass classname desc values fn-id keys)))
       (:get-field (destructuring-bind (id name) rest (%ldk-get-field (%ldk-deref id) name)))
       (:set-field (destructuring-bind (id name value) rest
-                    (%ldk-set-field (%ldk-deref id) name value))))))
+                    (%ldk-set-field (%ldk-deref id) name value)))
+      (:get-static (destructuring-bind (classname name) rest (%ldk-get-static classname name)))
+      (:set-static (destructuring-bind (classname name value) rest
+                     (%ldk-set-static classname name value))))))
 
 (defun %ldk-callback-cause-id (throwable)
   "The error id of the first of THROWABLE's causes that is the RuntimeException

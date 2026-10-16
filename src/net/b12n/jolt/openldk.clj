@@ -641,6 +641,22 @@ happens to the copy, a reply this code can't read included."
   (send! (fn [a] (wire/set-field-request obj field (field-value a value))))
   nil)
 
+(defn get-static
+  "The value of static field `field` of class `class-name` (dotted or
+  slashed), declared there, on a superinterface or on a superclass. Reading it
+  initializes the declaring class, as in Java:
+  (get-static \"java.lang.Integer\" \"MAX_VALUE\")."
+  [class-name field]
+  (send! (wire/get-static-request (dotted class-name) field)))
+
+(defn set-static!
+  "Set static field `field` of class `class-name` to `value`, converted as an
+  argument for a parameter of the field's type. A final field is refused.
+  Returns nil."
+  [class-name field value]
+  (send! (fn [a] (wire/set-static-request (dotted class-name) field (field-value a value))))
+  nil)
+
 (defmacro with-ref
   "Bind each name to a JavaRef-producing expression, run body, and release
   every one, on the throwing path too."
