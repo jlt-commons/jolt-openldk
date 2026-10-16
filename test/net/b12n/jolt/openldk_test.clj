@@ -723,6 +723,43 @@
       (is (= typed-refusal (msg #(ldk/call-static "Fixture" "deep" "([[I)I" [(int-array [1])]))))
       (is (re-find #"malformed method descriptor" (msg #(ldk/call-static "Fixture" "sum" "([I" (int-array [1]))))))))
 
+(deftest raw-arrays-convert-across-widths
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [msg #(ex-message (thrown %))]
+      (testing "a typed array into a component of another type, where every element fits"
+        (is (= [-2147483648 2147483647] (round-trip "J" (int-array [-2147483648 2147483647]))))
+        (is (= ["1.0" "-2.0"] (mapv str (round-trip "D" (int-array [1 -2])))))
+        (is (= ["1.0" "-2.0"] (mapv str (round-trip "F" (int-array [1 -2])))))
+        (is (= [-32768 32767] (round-trip "S" (int-array [-32768 32767]))))
+        (is (= [-128 127] (round-trip "B" (long-array [-128 127]))))
+        (is (= [1 -1] (round-trip "I" (long-array [1 -1]))))
+        (is (= [-128 127] (round-trip "I" (byte-array [-128 127]))))
+        (is (= [-32768 32767] (round-trip "J" (short-array [-32768 32767]))))
+        (is (= [\a (char 0xFFFF)] (round-trip "C" (int-array [97 0xFFFF]))))
+        (is (= ["0.5" "Infinity"] (mapv str (round-trip "D" (float-array [0.5 ##Inf])))))
+        (is (= ["0.5" "NaN"] (mapv str (round-trip "F" (double-array [0.5 ##NaN]))))))
+      (testing "where one doesn't, the error names it and its index"
+        (is (= "jolt-openldk: element 1 of the vector for [S: 32768 does not fit a Java short"
+               (msg #(ldk/new-array "S" (int-array [1 32768])))))
+        (is (= "jolt-openldk: element 0 of the vector for [B: 128 does not fit a Java byte"
+               (msg #(ldk/new-array "B" (short-array [128])))))
+        (is (= "jolt-openldk: element 1 of the vector for [C: -1 does not fit a Java char"
+               (msg #(ldk/new-array "C" (byte-array [1 -1])))))
+        (is (= "jolt-openldk: element 99999 of the vector for [I: 3000000000 does not fit a Java int"
+               (msg #(ldk/new-array "I" (long-array (conj (vec (repeat 99999 1)) 3000000000)))))))
+      (testing "a pairing Java wouldn't make is refused"
+        (is (= "jolt-openldk: element 0 of the vector for [I: a char for parameter I"
+               (msg #(ldk/new-array "I" (char-array [\a])))))
+        (is (= "jolt-openldk: element 0 of the vector for [I: a boolean for parameter I"
+               (msg #(ldk/new-array "I" (boolean-array [true])))))
+        (is (= "jolt-openldk: element 0 of the vector for [Z: an integer for parameter Z"
+               (msg #(ldk/new-array "Z" (int-array [1])))))
+        (is (= "jolt-openldk: element 0 of the vector for [I: a double for parameter I"
+               (msg #(ldk/new-array "I" (double-array [1.0])))))
+        (is (= "jolt-openldk: element 0 of the vector for [C: a double for parameter C"
+               (msg #(ldk/new-array "C" (float-array [1.0])))))))))
+
 (deftest raw-array-wire-refusals
   (when-built
     (ldk/init! {:classpath classes})
