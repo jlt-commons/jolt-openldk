@@ -24,7 +24,8 @@
   object, returned arrays included, comes back as a JavaRef, a handle that
   keeps the object alive until `release!`; read an array with `array->vec`, or
   a numeric one with `array->primitive`. A Java exception is an ex-info with
-  :java/class, :java/message and :java/string. Fields are read and written,
+  :java/class, :java/message and :java/string, and Java's System.exit an
+  ex-info with :java/exit, the process carrying on. Fields are read and written,
   with no descriptor, through `get-field`/`set-field!` and
   `get-static`/`set-static!`. Java calls Clojure through `implement`
   (interfaces) and `subclass` (a class, abstract or not).

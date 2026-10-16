@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Java's `System.exit` and `Runtime.halt` no longer end the jolt process. The call that reached them throws an `ex-info` with `:java/exit` and the status, from inside a static initializer or a callback too, and Java's `catch` and `finally` blocks around it don't run, as on the JVM. `run-main` returns the status of a `main` that exits. An exit on a thread Java started ends that thread only. Shutdown hooks don't run.
+
 - Fields, read and written from Clojure: `get-field` and `set-field!` on an object, `get-static` and `set-static!` on a class, so `(ldk/get-static "java.lang.Integer" "MAX_VALUE")` is 2147483647. No descriptor is needed. Values convert as a method's results and arguments of the field's type would, a final field is refused for writing, and access isn't checked, so a `subclass` override can reach the protected fields it inherits. A static field resolves as the JVM resolves it, interface constants included, and the first access initializes only the class that declares it.
 
 - A primitive array going into Java is read straight from memory into the
