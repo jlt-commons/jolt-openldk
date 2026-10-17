@@ -19,5 +19,18 @@
       (ldk/init! {:classpath [classes]})
       (binding [*out* *err*]
         (println "init! took ms:" (/ (- (System/nanoTime) t0) 1e6)))
-      (prn {:ok (deref fut 60000 :timed-out)})))
+      (prn {:ok (deref fut 60000 :timed-out)}))
+    "reinit"
+    ;; A call that waited out init! must not keep holding init-lock through
+    ;; its own Java call: a repeat init! during that call would stall for the
+    ;; call's whole length (here a 2 s Java sleep).
+    (let [fut (future (Thread/sleep 50)
+                      (ldk/call-static "java.lang.Thread" "sleep" "(J)V" 2000)
+                      :slept)]
+      (ldk/init! {:classpath [classes]})
+      (Thread/sleep 150)
+      (let [t0 (System/nanoTime)]
+        (ldk/init! {:classpath [classes]})
+        (let [fast (< (/ (- (System/nanoTime) t0) 1e6) 1000)]
+          (prn {:ok [(deref fut 60000 :timed-out) fast]})))))
   (shutdown-agents))

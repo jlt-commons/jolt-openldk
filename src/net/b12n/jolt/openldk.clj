@@ -219,14 +219,16 @@ happens to the copy, a reply this code can't read included."
   while init! is starting waits on init-lock for it, one before any init!
   throws, and one after a failed start throws what a repeat init! would."
   [request]
-  (if (= :ready (:phase @state))
-    (send-raw! request)
-    (locking init-lock
-      (let [{:keys [phase error]} @state]
-        (case phase
-          :ready (send-raw! request)
-          nil (throw (ex-info "jolt-openldk: call init! first" {}))
-          :failed (throw (ex-info (init-failed-message error) {:error error})))))))
+  (let [{:keys [phase error]} (if (= :ready (:phase @state))
+                                @state
+                                ;; Wait out an init! in flight, but call with
+                                ;; the lock released: holding it through a
+                                ;; Java call would stall every other waiter.
+                                (locking init-lock @state))]
+    (case phase
+      :ready (send-raw! request)
+      nil (throw (ex-info "jolt-openldk: call init! first" {}))
+      :failed (throw (ex-info (init-failed-message error) {:error error})))))
 
 (defn project-classpath
   "What `init!` would use for `opts` from the current directory: a map of

@@ -628,7 +628,8 @@
         (ldk/with-ref [t (ldk/subclass "java.lang.Thread" "(Ljava/lang/String;)V" ["worker-1"]
                                        {"run" (fn [this] (reset! ran [(ldk/ref? this) (.getName (Thread/currentThread))
                                                                       (ldk/call-static "java.lang.Math" "max" "(II)I" 1 2)]))})]
-          (is (= "worker-1" (ldk/call-static "Fixture" "startJoin" "(Ljava/lang/Thread;)Ljava/lang/String;" t)))
+          (is (= "worker-1" (deref (future (ldk/call-static "Fixture" "startJoin" "(Ljava/lang/Thread;)Ljava/lang/String;" t))
+                                   30000 ::timed-out)))
           (is (true? (first @ran)))
           (is (not= (.getName (Thread/currentThread)) (second @ran)) "run ran on the thread Java started")
           (is (= 2 (nth @ran 2)) "run called into Java from the thread Java started"))))
