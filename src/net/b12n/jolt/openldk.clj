@@ -380,8 +380,6 @@ happens to the copy, a reply this code can't read included."
 
 (def ^:private primitive-letters #{"Z" "B" "C" "S" "I" "J" "F" "D"})
 
-(defn- fits-long? [x] (and (integer? x) (<= Long/MIN_VALUE x Long/MAX_VALUE)))
-
 (defn- write-raw [arena carrier width n write!]
   (if (zero? n)
     (wire/->RawArray carrier 0 0)
@@ -410,7 +408,9 @@ happens to the copy, a reply this code can't read included."
       (let [n (count value)]
         (cond
           (zero? n) (wire/->RawArray :i64 0 0)
-          (every? fits-long? value)
+          ;; jolt narrows any integer that fits a long to a Long, so among integers
+          ;; int? is false only for a BigInt too big for one.
+          (every? int? value)
           (write-raw arena :i64 8 n #(ffi/write-array % :int64 (long-array value)))
           (every? #(or (double? %) (float? %)) value)
           (write-raw arena :f64 8 n #(ffi/write-array % :double (double-array value)))
@@ -496,8 +496,10 @@ happens to the copy, a reply this code can't read included."
         (case component
           "Z" (mapv #(not (zero? %)) data)
           "C" (mapv (fn [x] (let [u (bit-and x 0xFFFF)] (if (<= 0xD800 u 0xDFFF) u (char u)))) data)
-          ("F" "D") (mapv double data)
-          (mapv long data)))
+          ;; vec of a float-array gives Floats; every other numeric array
+          ;; already reads as longs or doubles.
+          "F" (mapv double data)
+          (vec data)))
       r)))
 
 (defn array->primitive

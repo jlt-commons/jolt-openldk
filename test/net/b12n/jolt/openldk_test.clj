@@ -873,6 +873,17 @@
           (when-not (#{"Z" "C"} component)
             (is (= expected (vec (ldk/array->primitive a))) component)))))))
 
+(deftest array->vec-gives-longs-and-doubles
+  (when-built
+    (ldk/init! {:classpath classes})
+    (doseq [[component values pred] [["B" [1 -2] #(instance? Long %)] ["S" [1 -2] #(instance? Long %)]
+                                     ["I" [1 -2] #(instance? Long %)] ["J" [1 -2] #(instance? Long %)]
+                                     ["F" [1.5 -2.0] double?] ["D" [1.5 -2.0] double?]]]
+      (ldk/with-ref [a (ldk/new-array component values)]
+        (let [v (ldk/array->vec a)]
+          (is (vector? v) component)
+          (is (every? pred v) component))))))
+
 (deftest strings-passed-in-are-java-strings
   ;; A string crosses into Java as OpenLDK's jstring, whose bytes used to be
   ;; unsigned where Java's byte[] is signed. JDK code depends on the sign, so
