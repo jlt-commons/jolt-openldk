@@ -1213,6 +1213,27 @@
                              (and (= (+ 10 k) (ldk/call op "applyAsInt" "(I)I" 10))
                                   (= (str "hi " k) (ldk/call g "greeting" "()Ljava/lang/String;"))))))))))
 
+(deftest monitor-exit-wakes-a-thread-entering-while-another-waits
+  ;; The spike suspected OpenLDK's monitor-exit wakes one waiter on the
+  ;; monitor's condition variable, which Object.wait() waiters share, so a
+  ;; thread blocked entering could miss its wakeup while a wait()er goes back
+  ;; to waiting.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [enter-ms (atom nil)
+          rs (on-threads 3 (fn [k]
+                             (case k
+                               0 (ldk/call-static "Fixture$Mon" "waitFor" "(J)I" 5000)
+                               1 (do (Thread/sleep 100)
+                                     (ldk/call-static "Fixture$Mon" "holdThenExit" "(J)I" 300))
+                               2 (do (Thread/sleep 150)
+                                     (let [t0 (System/nanoTime)
+                                           r (ldk/call-static "Fixture$Mon" "enter" "()I")]
+                                       (reset! enter-ms (/ (- (System/nanoTime) t0) 1e6))
+                                       r)))))]
+      (is (= [2 0 1] rs))
+      (is (some-> @enter-ms (< 3000)) (str "enter took " @enter-ms " ms")))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]
     (shutdown-agents)

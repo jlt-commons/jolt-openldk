@@ -269,6 +269,31 @@ being compiled elsewhere).  Blocks while another thread is compiling it."
            (setf (gethash method-key *methods-being-compiled*) t)
            (return t)))))))
 
+;; From src/monitor.lisp. A monitor's condition variable is shared by threads
+;; blocked entering it (monitor-enter) and threads in Object.wait() on it
+;; (wait0 waits on the same variable). Upstream's monitor-exit wakes one with
+;; bt:condition-notify, so when the one woken is a wait()er, it goes back to
+;; waiting and a thread blocked entering sleeps on a free monitor until
+;; something else churns it. Measured here: with one thread in wait(5000), an
+;; exit handed the monitor to a blocked enterer only after the full 5 s.
+;; Waking everything is what upstream's own notifyAll() does; each woken
+;; thread re-checks its loop condition, and wait()ers stay waiting, since
+;; nothing removed them from the wait set. Drop this when upstream broadcasts.
+(defun monitor-exit (object)
+  "Exit the monitor for OBJECT, releasing its mutex."
+  (when object
+    (let* ((monitor (%get-monitor object))
+           (mutex (mutex monitor))
+           (current-thread (current-thread-identity)))
+      (bordeaux-threads:with-lock-held (mutex)
+        (unless (eq (owner monitor) current-thread)
+          ;; JVM spec: monitorexit by a non-owner throws IllegalMonitorStateException.
+          (error (%lisp-condition (%make-throwable '|java/lang/IllegalMonitorStateException|))))
+        (decf (recursion-count monitor))
+        (when (zerop (recursion-count monitor))
+          (setf (owner monitor) nil)
+          (sb-thread:condition-broadcast (condition-variable monitor)))))))
+
 ;;; --- descriptors ---------------------------------------------------------
 
 (defun %ldk-field-end (desc start)
