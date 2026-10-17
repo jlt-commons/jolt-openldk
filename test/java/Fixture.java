@@ -236,4 +236,20 @@ public class Fixture {
         }
     }
     public static int readSlow() { return SlowInit.ready; }
+
+    // One monitor, three roles: a waiter in wait(), a holder that exits, a
+    // thread blocked entering. The exit must wake the enterer, not only the
+    // waiter.
+    public static class Mon {
+        static final Object lock = new Object();
+        public static int holdThenExit(long ms) throws InterruptedException {
+            synchronized (lock) { Thread.sleep(ms); }
+            return 0;
+        }
+        public static int enter() { synchronized (lock) { return 1; } }
+        public static int waitFor(long ms) throws InterruptedException {
+            synchronized (lock) { lock.wait(ms); }
+            return 2;
+        }
+    }
 }
