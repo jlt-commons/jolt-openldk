@@ -213,4 +213,27 @@ public class Fixture {
             return sum;
         }
     }
+
+    // Calls from many threads at once.
+    public static long fanOut(int threads, int each, java.util.function.IntUnaryOperator f) throws InterruptedException {
+        java.util.concurrent.atomic.AtomicLong sum = new java.util.concurrent.atomic.AtomicLong();
+        Thread[] ts = new Thread[threads];
+        for (int k = 0; k < threads; k++) {
+            ts[k] = new Thread(() -> { for (int i = 0; i < each; i++) sum.addAndGet(f.applyAsInt(i)); });
+            ts[k].start();
+        }
+        for (Thread t : ts) t.join();
+        return sum.get();
+    }
+    private static long bumped;
+    public static synchronized void tick() { bumped++; }
+    public static synchronized long ticks() { return bumped; }
+    public static class SlowInit {
+        public static int ready;
+        static {
+            try { Thread.sleep(300); } catch (InterruptedException e) { throw new RuntimeException(e); }
+            ready = 42;
+        }
+    }
+    public static int readSlow() { return SlowInit.ready; }
 }

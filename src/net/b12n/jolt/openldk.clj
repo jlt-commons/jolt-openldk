@@ -31,8 +31,8 @@
   (interfaces) and `subclass` (a class, abstract or not).
 
   One OpenLDK per process, set up once with one classpath, and no shutdown.
-  Calls are serialised: OpenLDK's own thread-safety is not established, so
-  two jolt threads take turns rather than meeting inside it."
+  Calls run from any thread, concurrently; a Java object shared between
+  threads needs the same care as it would between Java threads."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -73,7 +73,11 @@
   (every? #(.exists (io/file dist %)) [lib-name "openldk.core" (str "libsbcl." ext)]))
 
 (defonce ^:private state (atom nil))
-(def ^:private call-lock (Object.))
+(def ^:private init-lock (Object.))
+
+(defn- init-failed-message [error]
+  (str "jolt-openldk: an earlier init! failed after SBCL was started ("
+       error "); restart the process"))
 
 ;; --- Java calling Clojure: the fn table, the error table, the trampoline ------------
 ;;
@@ -191,25 +195,38 @@ happens to the copy, a reply this code can't read included."
                  (unknown)))}
       (finally (when-not (zero? address) (ldk-free address))))))
 
-(defn- send!
+(defn- send-raw!
   "One request across, one reply back, decoded. `request` is the request text,
   or a fn of the call's arena that returns it, for a request that names memory
   in that arena (a staged primitive array). The arena closes after the reply,
   and the bridge has copied out of it by then."
   [request]
-  (locking call-lock
-    (ffi/with-arena [a]
-      (let [request (if (string? request) request (request a))
-            out (ffi/alloc a 8)
-            rc (ldk-call (ffi/string->ptr a request) out)]
-        (when-not (zero? rc)
-          (throw (ex-info (str "jolt-openldk: the bridge could not produce a reply (status " rc ")")
-                          {:rc rc :request request})))
-        (let [p (ffi/read out :pointer 0)
-              text (try (ffi/ptr->string p) (finally (ldk-free p)))
-              v (try (wire/reply->value text)
-                     (catch Exception e (throw (rethrow-original e))))]
-          (if (instance? net.b12n.jolt.openldk.wire.RawReply v) (copy-raw v) v))))))
+  (ffi/with-arena [a]
+    (let [request (if (string? request) request (request a))
+          out (ffi/alloc a 8)
+          rc (ldk-call (ffi/string->ptr a request) out)]
+      (when-not (zero? rc)
+        (throw (ex-info (str "jolt-openldk: the bridge could not produce a reply (status " rc ")")
+                        {:rc rc :request request})))
+      (let [p (ffi/read out :pointer 0)
+            text (try (ffi/ptr->string p) (finally (ldk-free p)))
+            v (try (wire/reply->value text)
+                   (catch Exception e (throw (rethrow-original e))))]
+        (if (instance? net.b12n.jolt.openldk.wire.RawReply v) (copy-raw v) v)))))
+
+(defn- send!
+  "send-raw! once OpenLDK is ready. Calls run concurrently; one that arrives
+  while init! is starting waits on init-lock for it, one before any init!
+  throws, and one after a failed start throws what a repeat init! would."
+  [request]
+  (if (= :ready (:phase @state))
+    (send-raw! request)
+    (locking init-lock
+      (let [{:keys [phase error]} @state]
+        (case phase
+          :ready (send-raw! request)
+          nil (throw (ex-info "jolt-openldk: call init! first" {}))
+          :failed (throw (ex-info (init-failed-message error) {:error error})))))))
 
 (defn project-classpath
   "What `init!` would use for `opts` from the current directory: a map of
@@ -250,8 +267,6 @@ happens to the copy, a reply this code can't read included."
    -4 "the core did not export ldk_entry: was it built by bridge/build.sh?"
    -5 "an earlier start failed part-way, and SBCL cannot be started twice; restart the process"})
 
-(def ^:private init-lock (Object.))
-
 (defn- start!
   "Everything init! does the first time. Any failure once SBCL has been asked
   to start is recorded, because nothing after that point can be retried in
@@ -272,7 +287,7 @@ happens to the copy, a reply this code can't read included."
         (throw (ex-info (str "jolt-openldk: ldk_init failed: " (init-codes rc (str "status " rc)))
                         {:rc rc :dist dist}))))
     (install-trampoline!)
-    (send! (wire/setup classpath))
+    (send-raw! (wire/setup classpath))
     (reset! state {:phase :ready :classpath classpath :dist dist :core core})
     (catch Exception e
       (reset! state {:phase :failed :classpath classpath :dist dist :core core :error (ex-message e)})
@@ -360,9 +375,7 @@ happens to the copy, a reply this code can't read included."
                     (let [want (want)]
                       (when (not= want (select-keys current [:classpath :dist :core]))
                         (mismatch want))))
-           :failed (throw (ex-info (str "jolt-openldk: an earlier init! failed after SBCL was started ("
-                                        error "); restart the process")
-                                   {:error error})))
+           :failed (throw (ex-info (init-failed-message error) {:error error})))
          true)))))
 
 (defn initialized? [] (= :ready (:phase @state)))
@@ -577,9 +590,8 @@ happens to the copy, a reply this code can't read included."
   RuntimeException carrying its message, and if that exception comes back out
   through the call Clojure made, the original throwable is rethrown.
 
-  The fn may call back into Java on the same thread. A fn that Java runs on
-  another thread while this one waits inside a call must not call into Java:
-  calls take one lock, and the waiting call holds it."
+  The fn may call back into Java, on this thread or any thread Java runs it
+  on."
   [interfaces impl]
   (let [ifaces (if (string? interfaces) [interfaces] (vec interfaces))]
     (with-callback impl (fn [id] (wire/proxy-request ifaces id)))))
