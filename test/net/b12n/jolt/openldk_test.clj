@@ -625,13 +625,14 @@
     (ldk/init! {:classpath classes})
     (testing "a Thread subclass run on the Java thread Java started"
       (let [ran (atom nil)]
-        ;; run must not call into Java: this thread waits in join holding the
-        ;; call lock (the documented deadlock).
         (ldk/with-ref [t (ldk/subclass "java.lang.Thread" "(Ljava/lang/String;)V" ["worker-1"]
-                                       {"run" (fn [this] (reset! ran [(ldk/ref? this) (.getName (Thread/currentThread))]))})]
-          (is (= "worker-1" (ldk/call-static "Fixture" "startJoin" "(Ljava/lang/Thread;)Ljava/lang/String;" t)))
+                                       {"run" (fn [this] (reset! ran [(ldk/ref? this) (.getName (Thread/currentThread))
+                                                                      (ldk/call-static "java.lang.Math" "max" "(II)I" 1 2)]))})]
+          (is (= "worker-1" (deref (future (ldk/call-static "Fixture" "startJoin" "(Ljava/lang/Thread;)Ljava/lang/String;" t))
+                                   30000 ::timed-out)))
           (is (true? (first @ran)))
-          (is (not= (.getName (Thread/currentThread)) (second @ran)) "run ran on the thread Java started"))))
+          (is (not= (.getName (Thread/currentThread)) (second @ran)) "run ran on the thread Java started")
+          (is (= 2 (nth @ran 2)) "run called into Java from the thread Java started"))))
     (testing "a superclass constructor that calls an override reaches the fn"
       (ldk/with-ref [g (ldk/subclass "Fixture$Greeter" {"greet" (fn [_] "hello")})]
         (is (= "hello" (ldk/call g "greeting" "()Ljava/lang/String;")))))
@@ -1091,6 +1092,148 @@
       (is (nil? (ldk/call-static "Fixture" "runCatching" "(Ljava/lang/Runnable;)V" r)))
       (is (true? (ldk/get-static "Fixture" "callbackCaught"))
           "an ordinary throw is still a RuntimeException Java can catch"))))
+
+;;; --- calls from many threads ---------------------------------------------------
+
+(defn- on-threads
+  "Run (f k) for k below n on jolt futures; their values in order, where a
+  throw gives the throwable and 30 s gives ::timed-out."
+  [n f]
+  (let [futs (mapv (fn [k] (future (try (f k) (catch Throwable t t)))) (range n))]
+    (mapv #(deref % 30000 ::timed-out) futs)))
+
+(deftest a-callback-on-a-java-thread-can-call-java
+  ;; Before: the documented deadlock. The call held the lock while joining.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [got (promise)]
+      (ldk/with-ref [r (ldk/implement "java.lang.Runnable"
+                                      #(deliver got (ldk/call-static "java.lang.Math" "max" "(II)I" 3 9)))]
+        (is (= ::done (deref (future (ldk/call-static "Fixture" "onThread" "(Ljava/lang/Runnable;)V" r) ::done)
+                             30000 ::timed-out)))
+        (is (= 9 (deref got 1000 :none)))))))
+
+(deftest calls-from-many-threads
+  (when-built
+    (ldk/init! {:classpath classes})
+    (testing "warm calls from 4 threads, each result checked"
+      (ldk/call-static "java.lang.Math" "max" "(II)I" 1 2)
+      (is (= [true true true true]
+             (on-threads 4 (fn [k] (every? (fn [i] (= (max i k) (ldk/call-static "java.lang.Math" "max" "(II)I" i k)))
+                                           (range 500)))))))
+    (testing "a StringBuilder per thread, then release!"
+      (is (= [true true true true]
+             (on-threads 4 (fn [k] (let [sb (ldk/new-object "java.lang.StringBuilder" "()V")]
+                                     (dotimes [_ 500] (ldk/call sb "append" "(I)Ljava/lang/StringBuilder;" k))
+                                     (let [s (ldk/to-string sb)]
+                                       (ldk/release! sb)
+                                       (= s (apply str (repeat 500 k))))))))))
+    (testing "a synchronized counter bumped from 4 threads ends at the exact total"
+      (let [before (ldk/call-static "Fixture" "ticks" "()J")]
+        (is (= [:ok :ok :ok :ok] (on-threads 4 (fn [_] (dotimes [_ 500] (ldk/call-static "Fixture" "tick" "()V")) :ok))))
+        (is (= 2000 (- (ldk/call-static "Fixture" "ticks" "()J") before)))))
+    (testing "4 Java threads x 500 callbacks that each call Java"
+      (ldk/with-ref [op (ldk/implement "java.util.function.IntUnaryOperator"
+                                       (fn [i] (ldk/call-static "java.lang.Math" "max" "(II)I" i 0)))]
+        (is (= (* 4 (reduce + (range 500)))
+               (deref (future (ldk/call-static "Fixture" "fanOut" "(IILjava/util/function/IntUnaryOperator;)J" 4 500 op))
+                      30000 ::timed-out)))))
+    (testing "Java exceptions stay with their thread"
+      (let [want {"java.lang.NumberFormatException" 100}]
+        (is (= [want want want want]
+               (on-threads 4 (fn [_]
+                               (frequencies
+                                (repeatedly 100 #(try (ldk/call-static "java.lang.Integer" "parseInt"
+                                                                       "(Ljava/lang/String;)I" "x")
+                                                      :no-throw
+                                                      (catch Throwable t (:java/class (ex-data t))))))))))))
+    (testing "callback exceptions carry their own thread's data"
+      (ldk/with-ref [cmp (ldk/implement "java.util.Comparator" (fn [a b] (throw (ex-info "boom" {:pair [a b]}))))]
+        (is (= [true true true true]
+               (on-threads 4 (fn [k]
+                               (every? (fn [i]
+                                         (let [lo (+ (* 1000 k) i)
+                                               r (try (ldk/with-ref [l (ldk/call-static "java.util.Arrays" "asList"
+                                                                                        "([Ljava/lang/Object;)Ljava/util/List;"
+                                                                                        [lo (inc lo)])]
+                                                        (ldk/call-static "java.util.Collections" "sort"
+                                                                         "(Ljava/util/List;Ljava/util/Comparator;)V" l cmp)
+                                                        :no-throw)
+                                                      (catch Throwable t [(ex-message t) (:pair (ex-data t))]))]
+                                           (= ["boom" #{lo (inc lo)}] [(first r) (set (second r))])))
+                                       (range 100))))))))
+    (testing "a slow static initializer seen by 4 threads at once"
+      (is (= [42 42 42 42] (on-threads 4 (fn [_] (ldk/call-static "Fixture" "readSlow" "()I"))))))))
+
+(deftest released-on-one-thread-while-another-calls
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [xs (ldk/new-object "java.util.ArrayList" "()V")
+          rs (on-threads 2 (fn [k]
+                             (if (zero? k)
+                               (mapv (fn [_] (try (ldk/call xs "size" "()I") (catch Throwable t t)))
+                                     (range 2000))
+                               (do (Thread/sleep 1) (ldk/release! xs) :released))))]
+      (is (= :released (second rs)))
+      (is (every? (fn [r] (or (int? r)
+                              (and (instance? Throwable r)
+                                   (re-find #"no live Java object behind handle|not live" (str (ex-message r))))))
+                  (first rs))
+          (pr-str (remove int? (first rs)))))))
+
+(deftest exit-on-one-thread-leaves-the-others
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [rs (on-threads 4 (fn [k]
+                             (if (zero? k)
+                               (try (ldk/call-static "Fixture" "exitWith" "(I)V" 5) :no-throw
+                                    (catch Throwable t (ex-data t)))
+                               (every? (fn [i] (= (max i k) (ldk/call-static "java.lang.Math" "max" "(II)I" i k)))
+                                       (range 200)))))]
+      (is (= {:java/exit 5} (select-keys (first rs) [:java/exit])))
+      (is (= [true true true] (vec (rest rs)))))))
+
+(deftest arrays-from-many-threads
+  (when-built
+    (ldk/init! {:classpath classes})
+    (is (= [true true true true]
+           (on-threads 4 (fn [k]
+                           (let [v (vec (range (* k 1000) (* (inc k) 1000)))]
+                             (every? (fn [_]
+                                       (ldk/with-ref [a (ldk/new-array "I" (int-array v))]
+                                         (= v (ldk/array->vec a))))
+                                     (range 20)))))))))
+
+(deftest implement-and-subclass-from-many-threads
+  (when-built
+    (ldk/init! {:classpath classes})
+    (is (= [true true true true]
+           (on-threads 4 (fn [k]
+                           (ldk/with-ref [op (ldk/implement "java.util.function.IntUnaryOperator" (fn [i] (+ i k)))
+                                          g (ldk/subclass "Fixture$Greeter" {"greet" (fn [_] (str "hi " k))})]
+                             (and (= (+ 10 k) (ldk/call op "applyAsInt" "(I)I" 10))
+                                  (= (str "hi " k) (ldk/call g "greeting" "()Ljava/lang/String;"))))))))))
+
+(deftest monitor-exit-wakes-a-thread-entering-while-another-waits
+  ;; The spike suspected OpenLDK's monitor-exit wakes one waiter on the
+  ;; monitor's condition variable, which Object.wait() waiters share, so a
+  ;; thread blocked entering could miss its wakeup while a wait()er goes back
+  ;; to waiting.
+  (when-built
+    (ldk/init! {:classpath classes})
+    (let [enter-ms (atom nil)
+          rs (on-threads 3 (fn [k]
+                             (case k
+                               0 (ldk/call-static "Fixture$Mon" "waitFor" "(J)I" 5000)
+                               1 (do (Thread/sleep 100)
+                                     (ldk/call-static "Fixture$Mon" "holdThenExit" "(J)I" 300))
+                               2 (do (Thread/sleep 150)
+                                     (let [t0 (System/nanoTime)
+                                           r (ldk/call-static "Fixture$Mon" "enter" "()I")]
+                                       (reset! enter-ms (/ (- (System/nanoTime) t0) 1e6))
+                                       r)))))]
+      (is (= [2 0 1] rs))
+      (is (some-> @enter-ms (< 3000)) (str "enter took " @enter-ms " ms")))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk-test)]

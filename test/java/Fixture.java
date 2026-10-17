@@ -187,4 +187,69 @@ public class Fixture {
     public static void main(String[] args) {
         System.out.println("Fixture.main " + String.join(",", args));
     }
+
+    // Four threads release together into the same first call of work(), so
+    // they contend on OpenLDK's one compile of it.
+    public static class Claim {
+        static long work(int i) {
+            long s = 0;
+            for (int k = 0; k < 1000; k++) s += (long) i * k;
+            return s;
+        }
+        public static long race(int n) throws Exception {
+            java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(n);
+            long[] sums = new long[n];
+            Thread[] ts = new Thread[n];
+            for (int t = 0; t < n; t++) {
+                final int me = t;
+                ts[t] = new Thread(() -> {
+                    try { barrier.await(); } catch (Exception e) { throw new RuntimeException(e); }
+                    sums[me] = work(me);
+                });
+                ts[t].start();
+            }
+            long sum = 0;
+            for (int t = 0; t < n; t++) { ts[t].join(); sum += sums[t]; }
+            return sum;
+        }
+    }
+
+    // Calls from many threads at once.
+    public static long fanOut(int threads, int each, java.util.function.IntUnaryOperator f) throws InterruptedException {
+        java.util.concurrent.atomic.AtomicLong sum = new java.util.concurrent.atomic.AtomicLong();
+        Thread[] ts = new Thread[threads];
+        for (int k = 0; k < threads; k++) {
+            ts[k] = new Thread(() -> { for (int i = 0; i < each; i++) sum.addAndGet(f.applyAsInt(i)); });
+            ts[k].start();
+        }
+        for (Thread t : ts) t.join();
+        return sum.get();
+    }
+    private static long bumped;
+    public static synchronized void tick() { bumped++; }
+    public static synchronized long ticks() { return bumped; }
+    public static class SlowInit {
+        public static int ready;
+        static {
+            try { Thread.sleep(300); } catch (InterruptedException e) { throw new RuntimeException(e); }
+            ready = 42;
+        }
+    }
+    public static int readSlow() { return SlowInit.ready; }
+
+    // One monitor, three roles: a waiter in wait(), a holder that exits, a
+    // thread blocked entering. The exit must wake the enterer, not only the
+    // waiter.
+    public static class Mon {
+        static final Object lock = new Object();
+        public static int holdThenExit(long ms) throws InterruptedException {
+            synchronized (lock) { Thread.sleep(ms); }
+            return 0;
+        }
+        public static int enter() { synchronized (lock) { return 1; } }
+        public static int waitFor(long ms) throws InterruptedException {
+            synchronized (lock) { lock.wait(ms); }
+            return 2;
+        }
+    }
 }

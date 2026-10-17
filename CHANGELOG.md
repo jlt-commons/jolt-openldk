@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Calls into Java run from any jolt thread at once. The one lock every call
+  took is gone, so four CPU-bound calls on four threads take about what one
+  takes alone, and the deadlock it caused is too: a callback may call into
+  Java on any thread, including a Java thread your call is waiting on. A call
+  made while `init!` is starting waits for it, and one made before any
+  `init!` says so. Two OpenLDK wakeup bugs this exposed are fixed in the
+  carried bridge code: three or more threads making the same first call
+  could sleep forever on the method's one compile, and a thread entering a
+  monitor could sleep while it sat free beside an `Object.wait()`.
+
 - A vector of integers going into a primitive array is checked with `int?` before it's staged, which costs about 8 ms for a million elements where the old range check took 37. On the second run of `bb bench-arrays` (an M1 Pro), a million-element `int` vector went in in 44 to 45 ms, against 77 to 81 before. `array->vec` copies integer and `double` arrays with `vec` instead of converting each element, about 74 ms against 94 to 105 for a million `int`s on their own, though garbage collection swings the benchmark's end-to-end `array->vec` times by more than that.
 
 - Java's `System.exit` and `Runtime.halt` no longer end the jolt process. The call that reached them throws an `ex-info` with `:java/exit` and the status, from inside a static initializer or a callback too, and Java's `catch` and `finally` blocks around it don't run, as on the JVM. `run-main` returns the status of a `main` that exits. An exit on a thread Java started ends that thread only. Shutdown hooks don't run.

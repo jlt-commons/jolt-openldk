@@ -1,8 +1,8 @@
 ;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
 
 (ns net.b12n.jolt.openldk.patches-test
-  "The two OpenLDK fixes bridge.lisp carries, each checked in a jolt subprocess
-  under a watchdog, because one of them is about a call that never returned.
+  "The OpenLDK fixes bridge.lisp carries, each checked in a jolt subprocess
+  under a watchdog, because two of them are about calls that never returned.
   Skips when bridge/build.sh has not been run, unless JOLT_OPENLDK_REQUIRE is
   set."
   (:require [babashka.process :as p]
@@ -49,19 +49,21 @@
   (.mkdirs (.getParentFile (io/file f)))
   (Files/write (.toPath (io/file f)) bs (into-array OpenOption [])))
 
-(defn- run-check
-  "Runs patchcheck with ARGS in a jolt subprocess, ENV added to its
-  environment. Returns the map it printed, or {:timed-out true} after killing a
-  process that ran past timeout-ms. It's killed outright, since a SIGTERM
-  didn't stop the hang it checks for within two seconds."
-  [env & args]
+(defn- run-check-ns
+  "Runs the fixture namespace CHECK-NS with ARGS in a jolt subprocess, ENV
+  added to its environment. Returns the map it printed, or {:timed-out true}
+  after killing a process that ran past timeout-ms. It's killed outright,
+  since a SIGTERM didn't stop the hang it checks for within two seconds."
+  [check-ns env & args]
   (let [proc (apply p/process {:dir project :extra-env env :out :string :err :string}
-                    "jolt" "-M" "-m" "patchcheck" args)
+                    "jolt" "-M" "-m" check-ns args)
         r (deref proc timeout-ms ::timeout)]
     (if (= r ::timeout)
       (do (.destroyForcibly (:proc proc)) {:timed-out true})
       (or (some->> (str/split-lines (:out r)) (filter #(str/starts-with? % "{")) last edn/read-string)
           {:no-result (select-keys r [:exit :out :err])}))))
+
+(defn- run-check [env & args] (apply run-check-ns "patchcheck" env args))
 
 ;;; --- a failed JIT compile of an instance method ------------------------------
 
@@ -164,6 +166,35 @@
                   (run-check {"JAVA_HOME" (str home)} (str home)
                              "java.util.prefs.BackingStoreException" "(Ljava/lang/String;)V" "m")))
            (finally (delete-tree home))))))))
+
+(deftest four-threads-making-the-same-first-call-all-finish
+  ;; OpenLDK woke one waiter when a compile finished, on a condition variable
+  ;; every method shares, so the third thread waiting on a method slept
+  ;; forever. 2997000 is (reduce + (for [t (range 4) k (range 1000)] (* t k))).
+  (when-built
+   (let [classes (.getAbsolutePath (io/file (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes")))
+         r (run-check-ns "racecheck" {} classes "4")]
+     (is (not (:timed-out r)) "all four threads finish")
+     (is (= {:ok 2997000} r) (pr-str r)))))
+
+(deftest a-call-before-init-says-so
+  (when-built
+   (is (= {:error "jolt-openldk: call init! first"}
+          (run-check-ns "initcheck" {} "before-init" "x")))))
+
+(deftest a-call-during-init-waits-for-it
+  ;; initcheck's future calls Java 50 ms in, while init! (about 260 ms in a
+  ;; subprocess, measured 2026-10-17) is still starting.
+  (when-built
+   (let [classes (.getAbsolutePath (io/file (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes")))]
+     (is (= {:ok 4} (run-check-ns "initcheck" {} "during-init" classes))))))
+
+(deftest a-repeat-init-does-not-wait-for-a-stragglers-call
+  ;; The call that waited out init! used to hold init-lock through its own
+  ;; 2 s Java call, so the repeat init! stalled for all of it.
+  (when-built
+   (let [classes (.getAbsolutePath (io/file (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes")))]
+     (is (= {:ok [:slept true]} (run-check-ns "initcheck" {} "reinit" classes))))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.patches-test)]
