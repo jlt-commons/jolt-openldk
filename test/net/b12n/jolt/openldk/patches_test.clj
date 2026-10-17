@@ -189,6 +189,13 @@
    (let [classes (.getAbsolutePath (io/file (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes")))]
      (is (= {:ok 4} (run-check-ns "initcheck" {} "during-init" classes))))))
 
+(deftest a-repeat-init-does-not-wait-for-a-stragglers-call
+  ;; The call that waited out init! used to hold init-lock through its own
+  ;; 2 s Java call, so the repeat init! stalled for all of it.
+  (when-built
+   (let [classes (.getAbsolutePath (io/file (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes")))]
+     (is (= {:ok [:slept true]} (run-check-ns "initcheck" {} "reinit" classes))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.patches-test)]
     (shutdown-agents)

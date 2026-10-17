@@ -846,8 +846,10 @@ first argument when THIS-FIRST."
 
 (defvar *ldk-subclass-classes* (make-hash-table :test 'equal))
 (defvar *ldk-subclass-count* 0)
-(defvar *ldk-subclass-supers* (make-hash-table :test 'eq)
-  "Each generated subclass's CLOS class symbol, to its superclass's binary name.")
+(defvar *ldk-subclass-supers* (make-hash-table :test 'eq :synchronized t)
+  "Each generated subclass's CLOS class symbol, to its superclass's binary
+name. Synchronized: subclass writes it under the proxy lock, but call-super
+and the field owner walk read it on any calling thread.")
 
 (defun %ldk-flag-p (thing flag)
   (not (zerop (logand flag (slot-value thing 'access-flags)))))
