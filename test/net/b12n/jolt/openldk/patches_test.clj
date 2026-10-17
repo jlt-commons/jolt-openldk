@@ -177,6 +177,18 @@
      (is (not (:timed-out r)) "all four threads finish")
      (is (= {:ok 2997000} r) (pr-str r)))))
 
+(deftest a-call-before-init-says-so
+  (when-built
+   (is (= {:error "jolt-openldk: call init! first"}
+          (run-check-ns "initcheck" {} "before-init" "x")))))
+
+(deftest a-call-during-init-waits-for-it
+  ;; initcheck's future calls Java 50 ms in, while init! (about 260 ms in a
+  ;; subprocess, measured 2026-10-17) is still starting.
+  (when-built
+   (let [classes (.getAbsolutePath (io/file (or (System/getenv "JOLT_OPENLDK_TEST_CLASSES") "target/test-classes")))]
+     (is (= {:ok 4} (run-check-ns "initcheck" {} "during-init" classes))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'net.b12n.jolt.openldk.patches-test)]
     (shutdown-agents)
