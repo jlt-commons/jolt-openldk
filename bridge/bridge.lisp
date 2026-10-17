@@ -237,6 +237,38 @@ byte[]."
           (+ (* diff 1000000000) nanoseconds)
           -1))))
 
+;; From src/openldk.lisp. When %compile-method finishes a compile it wakes
+;; waiters with bt:condition-notify, which wakes one, on *method-compilation-cv*,
+;; a condition variable every method shares. So with three or more threads
+;; waiting on one method, the others sleep until some later compile happens to
+;; notify them, which may be never, and a notify meant for one method can be
+;; used up by a thread waiting on another. Upstream's one-line fix is
+;; sb-thread:condition-broadcast there. This copy differs from the original
+;; only in the non-AOT wait, which times out after 50 ms and re-reads the
+;; claim table, so a missed wakeup costs at most 50 ms. Drop it when the pin
+;; has the broadcast.
+(defun %claim-method-compilation (method-key)
+  "Atomically claim METHOD-KEY for compilation by this thread.  Return T if
+the caller should compile it, NIL if it is already compiled (or, in AOT mode,
+being compiled elsewhere).  Blocks while another thread is compiling it."
+  (bt:with-lock-held (*method-compilation-lock*)
+    (loop
+      (let ((status (gethash method-key *methods-being-compiled*)))
+        (cond
+          ((eq status :done)
+           ;; Already compiled by another thread
+           (return nil))
+          ((eq status t)
+           ;; In AOT mode, don't wait - just skip methods being compiled to
+           ;; avoid recursion; in normal mode, wait for the other thread.
+           (if *aot-dir*
+               (return nil)
+               (bt:condition-wait *method-compilation-cv* *method-compilation-lock*
+                                  :timeout 0.05)))
+          (t
+           (setf (gethash method-key *methods-being-compiled*) t)
+           (return t)))))))
+
 ;;; --- descriptors ---------------------------------------------------------
 
 (defun %ldk-field-end (desc start)

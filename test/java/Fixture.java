@@ -187,4 +187,30 @@ public class Fixture {
     public static void main(String[] args) {
         System.out.println("Fixture.main " + String.join(",", args));
     }
+
+    // Four threads release together into the same first call of work(), so
+    // they contend on OpenLDK's one compile of it.
+    public static class Claim {
+        static long work(int i) {
+            long s = 0;
+            for (int k = 0; k < 1000; k++) s += (long) i * k;
+            return s;
+        }
+        public static long race(int n) throws Exception {
+            java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(n);
+            long[] sums = new long[n];
+            Thread[] ts = new Thread[n];
+            for (int t = 0; t < n; t++) {
+                final int me = t;
+                ts[t] = new Thread(() -> {
+                    try { barrier.await(); } catch (Exception e) { throw new RuntimeException(e); }
+                    sums[me] = work(me);
+                });
+                ts[t].start();
+            }
+            long sum = 0;
+            for (int t = 0; t < n; t++) { ts[t].join(); sum += sums[t]; }
+            return sum;
+        }
+    }
 }
