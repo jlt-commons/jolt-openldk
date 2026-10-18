@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The OpenLDK pin moved from `701609f` to `4498cd2`, upstream master since all
+  five of this project's OpenLDK PRs (atgreen/openldk#14 through #18) were
+  merged on 2026-10-18. The six fixes the bridge carried for them are dropped;
+  behaviour is unchanged. The two thread-wakeup fixes from the concurrency
+  work are still carried, and are now sent upstream as atgreen/openldk#19
+  and #20.
+
 - Calls into Java run from any jolt thread at once. The one lock every call
   took is gone, so four CPU-bound calls on four threads take about what one
   takes alone, and the deadlock it caused is too: a callback may call into
