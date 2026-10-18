@@ -20,6 +20,8 @@ are kept as filed.
 Verified against `master` at `23da184e4bb89aeb2d3f230d9d608ac4cff7172b`
 (2026-10-09), SBCL 2.6.9, JDK 25.0.2, macOS arm64.
 
+**Sections 3 to 8 were sent upstream as pull requests [#14](https://github.com/atgreen/openldk/pull/14) through [#18](https://github.com/atgreen/openldk/pull/18), all merged on 2026-10-18.** `master` that day, `4498cd2`, is what jolt-openldk now pins, so the bridge no longer carries those six fixes. Sections 9 and 10 are the two still carried.
+
 ## 1. `lstring` reads Java's signed bytes as character codes
 
 `lstring` (`src/strings.lisp`) turns a `java/lang/String` into a Lisp string.
@@ -223,4 +225,53 @@ does: nanoseconds from the given epoch offset to now, or -1 when the offset is
 
 With the fixes in 6, 7 and 8 together, OpenLDK's own `make check-regression`
 passes on macOS arm64: 501 core passes against a baseline of 492.
+## 9. A compile finishing wakes one waiter on a shared condition variable
 
+Found 2026-10-17 against `4498cd2`'s `%compile-method` (unchanged since
+`701609f`), while removing the one lock jolt-openldk held across every call.
+Sent upstream as [#19](https://github.com/atgreen/openldk/pull/19)
+on 2026-10-19, after re-checking `master` at `4498cd2` and searching the
+tracker for duplicates (none mention threads, monitors or wakeups).
+
+`%claim-method-compilation` blocks a thread whose method another thread is
+compiling, on `*method-compilation-cv*`, one condition variable shared by every
+method. `%compile-method` finishes by waking it with `bt:condition-notify`,
+which wakes a single thread. So when three or more threads make the first call
+of the same method, the compile finishing frees one of the waiters and the rest
+sleep until some unrelated compile happens to notify again, which in a quiet
+program is never. A notify meant for one method can also be taken by a thread
+waiting on another.
+
+The fix is `sb-thread:condition-broadcast` there, which `notifyAll()` in
+`src/native/system.lisp` already uses. Woken threads re-check their method's
+status under the lock, and the wakeups happen once per method, at its first
+call. Measured with the new `testsuite/aaa/jitwake.java`, where four threads
+make the first call of the same method together: on stock `4498cd2` the run
+printed `stuck` after its 20 s join timed out, three runs out of three, and
+with the broadcast all four threads finish in about 2 s. The bridge carries a copy of
+`%claim-method-compilation` whose wait times out and re-checks every 50 ms,
+which costs at most 50 ms per missed wakeup; it is dropped when the pin has
+the broadcast.
+
+## 10. A monitor exit can wake a wait() instead of a thread entering
+
+Found 2026-10-17 the same way, timing a monitor handoff. Sent upstream as
+[#20](https://github.com/atgreen/openldk/pull/20) on 2026-10-19,
+with the same freshness checks as section 9.
+
+A monitor's condition variable is shared by threads blocked entering it and
+threads parked in `Object.wait()`. `monitor-exit` frees the monitor and wakes
+one thread with `bordeaux-threads:condition-notify`. When the wakeup lands on
+a `wait()`, that thread sees it is still in the wait set and goes back to sleep, and
+a thread entering stays asleep at the door of a free monitor until something
+else wakes it. Measured with the new `testsuite/aaa/monitorwake.java`: a
+holder exits after 300 ms while a second thread sits in `wait(5000)`, and the
+thread entering got in after about 5190 ms, three runs out of three, when the
+expiring wait exited the monitor and notified again. With the fix it enters in
+about 200 ms.
+
+The fix is `sb-thread:condition-broadcast` at that exit, which `notify()` and
+`notifyAll()` already use on the same condition variable. Threads entering
+contend for the mutex and all but one go back to waiting; threads in `wait()`
+re-check their wait-set membership, as they already must. The bridge carries a copy of
+`monitor-exit` with the broadcast; it is dropped when the pin has it.
