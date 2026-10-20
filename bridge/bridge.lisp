@@ -50,68 +50,6 @@
 
 (in-package :openldk)
 
-;;; --- fixes carried for OpenLDK -------------------------------------------
-;;; OpenLDK functions replaced whole, until the pinned OpenLDK has the
-;;; fixes. When the pin moves, compare each with its original (named below) and
-;;; drop it once upstream matches.
-
-;; From src/openldk.lisp. When %compile-method finishes a compile it wakes
-;; waiters with bt:condition-notify, which wakes one, on *method-compilation-cv*,
-;; a condition variable every method shares. So with three or more threads
-;; waiting on one method, the others sleep until some later compile happens to
-;; notify them, which may be never, and a notify meant for one method can be
-;; used up by a thread waiting on another. Upstream's one-line fix is
-;; sb-thread:condition-broadcast there. This copy differs from the original
-;; only in the non-AOT wait, which times out after 50 ms and re-reads the
-;; claim table, so a missed wakeup costs at most 50 ms. Drop it when the pin
-;; has the broadcast.
-(defun %claim-method-compilation (method-key)
-  "Atomically claim METHOD-KEY for compilation by this thread.  Return T if
-the caller should compile it, NIL if it is already compiled (or, in AOT mode,
-being compiled elsewhere).  Blocks while another thread is compiling it."
-  (bt:with-lock-held (*method-compilation-lock*)
-    (loop
-      (let ((status (gethash method-key *methods-being-compiled*)))
-        (cond
-          ((eq status :done)
-           ;; Already compiled by another thread
-           (return nil))
-          ((eq status t)
-           ;; In AOT mode, don't wait - just skip methods being compiled to
-           ;; avoid recursion; in normal mode, wait for the other thread.
-           (if *aot-dir*
-               (return nil)
-               (bt:condition-wait *method-compilation-cv* *method-compilation-lock*
-                                  :timeout 0.05)))
-          (t
-           (setf (gethash method-key *methods-being-compiled*) t)
-           (return t)))))))
-
-;; From src/monitor.lisp. A monitor's condition variable is shared by threads
-;; blocked entering it (monitor-enter) and threads in Object.wait() on it
-;; (wait0 waits on the same variable). Upstream's monitor-exit wakes one with
-;; bt:condition-notify, so when the one woken is a wait()er, it goes back to
-;; waiting and a thread blocked entering sleeps on a free monitor until
-;; something else churns it. Measured here: with one thread in wait(5000), an
-;; exit handed the monitor to a blocked enterer only after the full 5 s.
-;; Waking everything is what upstream's own notifyAll() does; each woken
-;; thread re-checks its loop condition, and wait()ers stay waiting, since
-;; nothing removed them from the wait set. Drop this when upstream broadcasts.
-(defun monitor-exit (object)
-  "Exit the monitor for OBJECT, releasing its mutex."
-  (when object
-    (let* ((monitor (%get-monitor object))
-           (mutex (mutex monitor))
-           (current-thread (current-thread-identity)))
-      (bordeaux-threads:with-lock-held (mutex)
-        (unless (eq (owner monitor) current-thread)
-          ;; JVM spec: monitorexit by a non-owner throws IllegalMonitorStateException.
-          (error (%lisp-condition (%make-throwable '|java/lang/IllegalMonitorStateException|))))
-        (decf (recursion-count monitor))
-        (when (zerop (recursion-count monitor))
-          (setf (owner monitor) nil)
-          (sb-thread:condition-broadcast (condition-variable monitor)))))))
-
 ;;; --- descriptors ---------------------------------------------------------
 
 (defun %ldk-field-end (desc start)

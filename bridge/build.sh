@@ -18,7 +18,7 @@
 set -eu
 
 SBCL_VERSION=2.6.9
-OPENLDK_REF=4498cd2f1dadf96d509bd5ef83314de0229790b6
+OPENLDK_REF=949939d02a0ede009ac153a1c3f73fa155c650fd
 OPENLDK_SRC=${OPENLDK_SRC:-https://github.com/atgreen/openldk.git}
 HOME_DIR=${JOLT_OPENLDK_HOME:-$HOME/.cache/jolt-openldk}
 WORK=$HOME_DIR/work
