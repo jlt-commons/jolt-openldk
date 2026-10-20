@@ -20,7 +20,7 @@ are kept as filed.
 Verified against `master` at `23da184e4bb89aeb2d3f230d9d608ac4cff7172b`
 (2026-10-09), SBCL 2.6.9, JDK 25.0.2, macOS arm64.
 
-**Sections 3 to 8 were sent upstream as pull requests [#14](https://github.com/atgreen/openldk/pull/14) through [#18](https://github.com/atgreen/openldk/pull/18), all merged on 2026-10-18.** `master` that day, `4498cd2`, is what jolt-openldk now pins, so the bridge no longer carries those six fixes. Sections 9 and 10 are the two still carried.
+**Sections 3 to 8 were sent upstream as pull requests [#14](https://github.com/atgreen/openldk/pull/14) through [#18](https://github.com/atgreen/openldk/pull/18), all merged on 2026-10-18. Sections 9 and 10 went up as [#19](https://github.com/atgreen/openldk/pull/19) and [#20](https://github.com/atgreen/openldk/pull/20) and were merged by 2026-10-19.** jolt-openldk now pins `949939d`, `master` that day, so the bridge no longer replaces any OpenLDK function.
 
 ## 1. `lstring` reads Java's signed bytes as character codes
 
@@ -108,7 +108,8 @@ Reproduced on OpenLDK alone with a version-49 class whose constructor calls an
 instance method that uses `jsr`, which OpenLDK doesn't translate: it hangs
 after `JIT-ERROR in p/Jsr.m()V: The function :JSR is undefined.` Interning the
 instance-method stub in `:openldk` makes the call throw "JIT compilation failed
-for p/Jsr.m()V" instead. `bridge/bridge.lisp` carries that version.
+for p/Jsr.m()V" instead. `bridge/bridge.lisp` carried that version until the
+pin reached `4498cd2`.
 
 ## 4. jmods whose zip offsets count from the start of the file
 
@@ -149,7 +150,8 @@ signed. Every string jolt-openldk passes in is a `jstring`, so before the fix
 `"hé"` crossed in, went through `getBytes("UTF-8")` and came back as
 `[104 -23]`.
 
-`bridge/bridge.lisp` carries the fixed function, which writes both coders'
+`bridge/bridge.lisp` carried the fixed function until the pin reached
+`4498cd2`. It writes both coders'
 bytes signed (`lstring` already masks each byte, so reading is unchanged), and
 a String `print-object` that prints through `lstring`, because upstream's
 passed the raw bytes to `code-char`. It's loaded before the core initializes
@@ -248,10 +250,10 @@ status under the lock, and the wakeups happen once per method, at its first
 call. Measured with the new `testsuite/aaa/jitwake.java`, where four threads
 make the first call of the same method together: on stock `4498cd2` the run
 printed `stuck` after its 20 s join timed out, three runs out of three, and
-with the broadcast all four threads finish in about 2 s. The bridge carries a copy of
-`%claim-method-compilation` whose wait times out and re-checks every 50 ms,
-which costs at most 50 ms per missed wakeup; it is dropped when the pin has
-the broadcast.
+with the broadcast all four threads finish in about 2 s. Merged on 2026-10-19.
+Until the pin reached `949939d` the bridge carried a copy of
+`%claim-method-compilation` whose wait timed out and re-checked every 50 ms,
+so a missed wakeup cost at most 50 ms.
 
 ## 10. A monitor exit can wake a wait() instead of a thread entering
 
@@ -273,5 +275,11 @@ about 200 ms.
 The fix is `sb-thread:condition-broadcast` at that exit, which `notify()` and
 `notifyAll()` already use on the same condition variable. Threads entering
 contend for the mutex and all but one go back to waiting; threads in `wait()`
-re-check their wait-set membership, as they already must. The bridge carries a copy of
-`monitor-exit` with the broadcast; it is dropped when the pin has it.
+re-check their wait-set membership, as they already must. Merged on
+2026-10-18. Until the pin reached `949939d` the bridge carried a copy of
+`monitor-exit` with the broadcast.
+
+The maintainer then found the same lost wakeup one step earlier, where
+`wait(J)` and `wait0(J)` give up the monitor and wake one thread on the same
+variable, and fixed it the same way in
+[#21](https://github.com/atgreen/openldk/pull/21) with `aaa/waitwake.java`.

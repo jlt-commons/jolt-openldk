@@ -2,12 +2,14 @@
 
 ## Unreleased
 
-- The OpenLDK pin moved from `701609f` to `4498cd2`, upstream master since all
-  five of this project's OpenLDK PRs (atgreen/openldk#14 through #18) were
-  merged on 2026-10-18. The six fixes the bridge carried for them are dropped;
-  behaviour is unchanged. The two thread-wakeup fixes from the concurrency
-  work are still carried, and are now sent upstream as atgreen/openldk#19
-  and #20.
+- The OpenLDK pin moved from `701609f` to `949939d`, upstream master once all
+  seven of this project's OpenLDK PRs (atgreen/openldk#14 through #20) were
+  merged, by 2026-10-19. The bridge no longer replaces any OpenLDK function:
+  the six fixes it carried for #14 to #18 and the two thread-wakeup fixes from
+  the concurrency work are all upstream now, and behaviour is unchanged. The
+  pin also brings atgreen/openldk#21, the maintainer's fix for the same lost
+  wakeup where `Object.wait()` gives up a monitor, so a thread entering no
+  longer sleeps beside a free monitor while another thread waits.
 
 - Calls into Java run from any jolt thread at once. The one lock every call
   took is gone, so four CPU-bound calls on four threads take about what one
@@ -15,7 +17,7 @@
   Java on any thread, including a Java thread your call is waiting on. A call
   made while `init!` is starting waits for it, and one made before any
   `init!` says so. Two OpenLDK wakeup bugs this exposed are fixed in the
-  carried bridge code: three or more threads making the same first call
+  pinned OpenLDK: three or more threads making the same first call
   could sleep forever on the method's one compile, and a thread entering a
   monitor could sleep while it sat free beside an `Object.wait()`.
 

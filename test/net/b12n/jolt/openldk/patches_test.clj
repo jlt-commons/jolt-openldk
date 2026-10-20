@@ -1,8 +1,9 @@
 ;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
 
 (ns net.b12n.jolt.openldk.patches-test
-  "The OpenLDK fixes bridge.lisp carries, each checked in a jolt subprocess
-  under a watchdog, because two of them are about calls that never returned.
+  "OpenLDK fixes the bridge once carried and the pinned OpenLDK now has, and
+  what a call sees around init!, each checked in a jolt subprocess under a
+  watchdog, because several of them are about calls that never returned.
   Skips when bridge/build.sh has not been run, unless JOLT_OPENLDK_REQUIRE is
   set."
   (:require [babashka.process :as p]
