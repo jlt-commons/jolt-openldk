@@ -22,8 +22,8 @@ RUN apt-get update \
 
 # jolt and babashka publish .sha256 files and these values match them; ocicl
 # publishes none, so its hash was measured on 2026-10-09.
-ARG JOLT_VERSION=v0.8.22
-ARG JOLT_SHA256_AMD64=b6aef5a73c8537cf7e5c4d51887511c275fde1a01ca9ac59a0f5200e606ccd0f
+ARG JOLT_VERSION=v0.8.24
+ARG JOLT_SHA256_AMD64=8f5dc27988830c7cf1780fd877e2b35ae6a5aa2acce79760194ff007ed3447d7
 ARG BB_VERSION=1.13.225
 ARG BB_SHA256_AMD64=ab0e98307405ba19e7c5ba0c3c7cd17a6f90aa90577a72709055f120796d6bfe
 ARG BB_SHA256_ARM64=7fd4ce2c6ac9975bfd6f20a42a49f5d6f95d8ac0b2c4d9336dc6afc67ad11ce2
